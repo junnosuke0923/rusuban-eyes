@@ -1,0 +1,1782 @@
+<meta charset="utf-8">
+<title>留守番の目</title>
+<script>
+  // 常駐ツール（画面オフキー.exe）から開かれたときの見せ方。
+  //   ?app=monitor  … 留守モードの外付けモニター（目だけを画面いっぱいに）
+  //   ?app=settings … 設定画面（ブラウザ向けの説明を隠し、確かめるボタンを出す）
+  //   ?app=ipad     … iPad からモニターに映す（目だけを画面いっぱいに。タップで調整パネル）。
+  //                   ホーム画面に追加して開いたときも、この見せ方になる
+  (function () {
+    const q = new URLSearchParams(location.search).get('app');
+    const homeApp = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+    document.documentElement.dataset.app = q || (homeApp ? 'ipad' : '');
+  })();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="留守番の目">
+<meta name="theme-color" content="#000000">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* 目が光る「黒いモニター」が主役なので、ページ全体も暗い一色で通す */
+  :root {
+    color-scheme: dark;
+    --ground: #0c0a08;
+    --surface: #15120e;
+    --surface-2: #1f1a14;
+    --line: #2e271e;
+    --text: #efe8dc;
+    --muted: #a59a88;
+    --accent: #ffb547;
+    --accent-ink: #1a1206;
+    --display: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Consolas", monospace;
+  }
+  body {
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--display);
+    font-size: 15px;
+    line-height: 1.7;
+    padding-inline: 16px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding-block: 20px 48px; display: grid; gap: 22px; }
+
+  header { display: grid; gap: 6px; }
+  .title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: clamp(24px, 4.2vw, 32px); font-weight: 700; letter-spacing: .03em; text-wrap: balance; }
+  .tag { font-family: var(--mono); font-size: 12px; color: var(--accent); border: 1px solid #5a4422; padding: 0 9px; border-radius: 999px; }
+  header p { margin: 0; color: var(--muted); max-width: 40em; }
+
+  .monitor { display: grid; gap: 8px; }
+  .stage {
+    position: relative; width: 100%; max-width: 100%; aspect-ratio: 16 / 9;
+    background: #000; border-radius: 12px; border: 1px solid var(--line);
+    box-shadow: 0 0 0 7px #110e0b, 0 20px 44px rgba(0,0,0,.55);
+    overflow: hidden; touch-action: manipulation; cursor: crosshair;
+  }
+  .stage { user-select: none; -webkit-user-select: none; }
+  .stage canvas { display: block; width: 100%; height: 100%; }
+  .stage:fullscreen { border-radius: 0; border: 0; box-shadow: none; aspect-ratio: auto; width: 100vw; height: 100vh; }
+  /* 全画面が許されない枠の中では、ページいっぱいに広げて代わりにする */
+  body.cssfull { overflow: hidden; }
+  body.cssfull .stage {
+    position: fixed; inset: 0; z-index: 50; width: auto; height: auto; aspect-ratio: auto;
+    border-radius: 0; border: 0; box-shadow: none;
+  }
+  .stage.idle { cursor: none; }
+  .fs-hint {
+    position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
+    font-family: var(--mono); font-size: 13px; color: #8a7c66; white-space: nowrap;
+    opacity: 0; transition: opacity .6s ease; pointer-events: none;
+  }
+  .fs-hint.show { opacity: 1; transition-duration: .15s; }
+  /* 全画面の間だけ、右上に調整パネルを重ねる。マウスを止めると消え、動かすと出る */
+  .fs-panel { display: none; }
+  .stage.with-panel .fs-panel {
+    display: grid; gap: 18px; align-content: start;
+    position: absolute; top: 16px; right: 16px; width: min(340px, calc(100% - 32px));
+    max-height: calc(100% - 32px); overflow-y: auto; overscroll-behavior: contain;
+    padding: 16px; border-radius: 12px; border: 1px solid var(--line);
+    background: rgba(14, 11, 8, .8); backdrop-filter: blur(6px);
+    cursor: default; transition: opacity .4s ease;
+  }
+  .stage.with-panel.idle .fs-panel,
+  .stage.with-panel.panel-off .fs-panel { opacity: 0; pointer-events: none; }
+  .fs-panel .group { gap: 8px; }
+  .fs-panel h2 { margin-top: 4px !important; }
+  .fs-panel .styles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .fs-panel .style-btn { padding: 6px 6px 8px; gap: 4px; }
+  .fs-panel .style-btn .d, .fs-panel .hint { display: none; }
+  .fs-panel .chip { font-size: 13px; padding: 5px 12px; }
+  .fs-panel .hint.keep { display: block; }
+  .fs-panel input, .fs-panel select { user-select: text; -webkit-user-select: text; }
+  /* 話している英文の字幕。話し終えた語は明るく、いま話している語は目の色で光らせる */
+  .caption {
+    position: absolute; left: 50%; bottom: 8%; transform: translateX(-50%);
+    width: max-content; max-width: 84%; text-align: center; text-wrap: balance;
+    font-family: var(--display); font-weight: 500; line-height: 1.4; letter-spacing: .01em;
+    color: rgba(239, 232, 220, .34); opacity: 0; transition: opacity .6s ease; pointer-events: none;
+  }
+  .caption.show { opacity: 1; transition-duration: .2s; }
+  .caption .said { color: rgba(239, 232, 220, .82); }
+  .caption .now { color: var(--cap, #ffe4a5); text-shadow: 0 0 .45em var(--cap-glow, rgba(255, 138, 38, .75)); }
+  .meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 16px; font-family: var(--mono); font-size: 12px; color: var(--muted); padding-top: 6px; }
+  .meta b { color: var(--accent); font-weight: 500; }
+
+  .panel { display: grid; gap: 26px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 860px) { .panel { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); } }
+  .group { display: grid; gap: 10px; align-content: start; }
+  h2 { margin: 0; font-size: 14px; font-weight: 500; color: var(--muted); letter-spacing: .08em; }
+
+  .styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .style-btn {
+    display: grid; gap: 6px; align-content: start; padding: 8px 8px 10px; text-align: left;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    color: var(--text); font: inherit; cursor: pointer;
+  }
+  .style-btn canvas { width: 100%; max-width: 100%; aspect-ratio: 16 / 9; display: block; background: #000; border-radius: 6px; }
+  .style-btn .n { font-weight: 700; font-size: 14px; line-height: 1.4; }
+  .style-btn .d { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .style-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--surface-2); }
+  .style-btn[aria-pressed="true"] .n::after { content: " ・選択中"; color: var(--accent); font-weight: 500; font-size: 12px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font: inherit; font-size: 14px; padding: 7px 15px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  }
+  .chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .chip:active { transform: translateY(1px); }
+
+  .slider { display: grid; gap: 4px; }
+  .slider-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .slider-head label { font-size: 14px; }
+  .readout { font-family: var(--mono); font-size: 13px; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .hint { font-size: 12.5px; color: var(--muted); min-height: 1.6em; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); margin: 2px 0; }
+
+  .tools { display: flex; flex-wrap: wrap; gap: 8px; }
+  .text-in {
+    font: inherit; font-size: 14px; width: 100%; min-width: 0; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  }
+  .text-in::placeholder { color: #7d7262; }
+  .chip .dot { display: inline-block; width: .8em; height: .8em; border-radius: 50%; margin-right: 7px; vertical-align: -.06em; }
+  .chip.primary { border-color: #6a4f26; background: var(--surface-2); }
+  .chip.primary.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  /* 色合い・あざやかさのつまみは、溝に選べる色を並べる（溝の色は JS で塗る） */
+  input.tone-range {
+    -webkit-appearance: none; appearance: none; height: 10px; border-radius: 999px; margin: 7px 0;
+    border: 1px solid var(--line); background: #333;
+  }
+  input.tone-range::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--text); border: 3px solid var(--ground); box-shadow: 0 0 0 1px #6a5a44; cursor: pointer;
+  }
+  input.tone-range::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%; background: var(--text); border: 3px solid var(--ground); cursor: pointer;
+  }
+  .note { border-top: 1px solid var(--line); padding-top: 14px; color: var(--muted); font-size: 13.5px; display: grid; gap: 4px; max-width: 44em; }
+  .note p { margin: 0; }
+  .note strong { color: var(--text); font-weight: 500; }
+
+  .chip:disabled { opacity: .45; cursor: default; }
+  .chip:disabled:active { transform: none; }
+
+  /* 常駐ツールの中で開いたとき */
+  html[data-app="monitor"] body { margin: 0; padding: 0; overflow: hidden; background: #000; cursor: none; }
+  html[data-app="monitor"] .wrap { display: block; max-width: none; padding: 0; }
+  html[data-app="monitor"] .wrap > :not(.monitor), html[data-app="monitor"] .meta { display: none; }
+  html[data-app="monitor"] .stage {
+    position: fixed; inset: 0; width: auto; height: auto; aspect-ratio: auto;
+    border: 0; border-radius: 0; box-shadow: none; cursor: none;
+  }
+  html[data-app="monitor"] .stage canvas { animation: eyes-in 1.8s ease-out both; }   /* 映し始めは、ふわっと灯る */
+  html[data-app="ipad"] body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+  html[data-app="ipad"] .wrap { display: block; max-width: none; padding: 0; }
+  html[data-app="ipad"] .wrap > :not(.monitor), html[data-app="ipad"] .meta { display: none; }
+  html[data-app="ipad"] .stage canvas { animation: eyes-in 1.8s ease-out both; }
+  html[data-app="ipad"] .stage.with-panel .fs-panel {
+    top: max(16px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right));
+    max-height: calc(100% - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+  @keyframes eyes-in { from { opacity: 0; } }
+  html:not([data-app="settings"]) [data-only="settings"] { display: none !important; }
+  html[data-app="settings"] [data-only="web"] { display: none !important; }
+  .app-bar {
+    display: grid; gap: 10px; margin-top: 8px; padding: 14px 16px; max-width: 44em;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+  }
+
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="title-row">
+      <h1>留守番の目</h1>
+      <span class="tag" data-only="web">試作 11</span>
+      <span class="tag" data-only="settings">設定</span>
+    </div>
+    <p data-only="web">Pause キーで席を外したとき、外付けモニターに映す「目」の試作です。モニター部分をタップすると（パソコンならマウスを動かすと）、そこを見ます。ダブルクリックか F キーで全画面になります。色を変えたり、英語で話させたりできます（試作 9 で口を目と同じ光り方に描き直しました）。</p>
+    <p data-only="settings">Pause キー（または Win + F12）で留守モードにしたとき、外付けモニターに映す目の設定です。ここで変えた値は自動で保存され、映っている目にもすぐ反映されます。</p>
+    <div class="app-bar" data-only="settings">
+      <div class="tools">
+        <button class="chip primary" id="preview" type="button" aria-pressed="false">外付けモニターで確かめる</button>
+      </div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="monBright">留守モード中のモニターの明るさ</label>
+          <span class="readout" id="monBrightOut">30</span>
+        </div>
+        <input type="range" id="monBright" min="0" max="100" step="5" value="30">
+      </div>
+      <div class="hint" id="appHint"></div>
+    </div>
+  </header>
+
+  <section class="monitor" aria-label="モニターの見え方">
+    <div class="stage" id="stage">
+      <canvas id="eyes" aria-label="動く目のアニメーション"></canvas>
+      <div class="fs-hint" id="fsHint" aria-live="polite"></div>
+      <div class="caption" id="caption" lang="en"></div>
+      <div class="fs-panel" id="fsPanel" aria-label="調整パネル"></div>
+    </div>
+    <div class="meta">
+      <span>外付けモニター 2560 × 1440 の見え方</span>
+      <span>いま：<b id="now">見回している</b></span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="group" id="lookGroup">
+      <h2>目の形（4案）</h2>
+      <div class="styles" id="styles"></div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="size">目の大きさ</label>
+          <span class="readout" id="sizeOut">×1.00</span>
+        </div>
+        <input type="range" id="size" min="0.7" max="1.4" step="0.02" value="1">
+      </div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="gap">目の間隔</label>
+          <span class="readout" id="gapOut">×1.14</span>
+        </div>
+        <input type="range" id="gap" min="0.86" max="1.5" step="0.02" value="1.14">
+      </div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="rise">目の高さ（右へ動かすと上へ）</label>
+          <span class="readout" id="riseOut">上へ 4%</span>
+        </div>
+        <input type="range" id="rise" min="-20" max="20" step="1" value="4">
+      </div>
+
+      <h2 style="margin-top: 14px;">色</h2>
+      <div class="chips" id="tones"></div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="hue">色合い</label>
+          <span class="readout" id="hueOut">0°</span>
+        </div>
+        <input type="range" class="tone-range" id="hue" min="-180" max="180" step="2" value="0">
+      </div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="sat">あざやかさ</label>
+          <span class="readout" id="satOut">100%</span>
+        </div>
+        <input type="range" class="tone-range" id="sat" min="0" max="100" step="5" value="100">
+      </div>
+
+      <h2 style="margin-top: 14px;">光り方</h2>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="feather">輪郭のぼかし</label>
+          <span class="readout" id="featherOut">10</span>
+        </div>
+        <input type="range" id="feather" min="0" max="25" step="1" value="10">
+      </div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="spread">光の広がり</label>
+          <span class="readout" id="spreadOut">×1.2</span>
+        </div>
+        <input type="range" id="spread" min="0.5" max="2.5" step="0.1" value="1.2">
+      </div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="bright">目の明るさ</label>
+          <span class="readout" id="brightOut">65%</span>
+        </div>
+        <input type="range" id="bright" min="20" max="100" step="5" value="65">
+      </div>
+      <div class="slider">
+        <div class="slider-head">
+          <label for="glow">まわりの光の濃さ</label>
+          <span class="readout" id="glowOut">×0.6</span>
+        </div>
+        <input type="range" id="glow" min="0" max="2" step="0.1" value="0.6">
+      </div>
+      <div class="tools" data-only="web">
+        <button class="chip" id="compare" type="button" aria-pressed="false">試作 4 の形と比べる</button>
+      </div>
+      <div class="readout" id="summary" style="white-space: normal;"></div>
+      <div class="tools">
+        <button class="chip" id="copy" type="button">設定をコピー</button>
+        <button class="chip" id="reset" type="button">初期値に戻す</button>
+      </div>
+      <div class="hint"><span data-only="web">つまみの値はこのブラウザに保存され、次に開いたときも残ります。</span><span data-only="settings">値は自動で保存され、留守モードの目にそのまま使われます。</span>「初期値に戻す」は、これまでに決めた値（高さは「上へ 4%」）に戻します。</div>
+    </div>
+
+    <div class="group" style="gap: 20px;">
+      <div class="group" id="moodGroup">
+        <h2>表情を試す</h2>
+        <div class="chips" id="moods"></div>
+        <div class="hint">押さなくても、ときどき自分でこれらの表情をします。</div>
+      </div>
+
+      <div class="group" id="talkGroup">
+        <h2>英語で話す</h2>
+        <input class="text-in" id="talkText" type="text" lang="en" maxlength="200" autocomplete="off" spellcheck="false"
+               placeholder="好きな英文（空なら用意した文を順に）" aria-label="話させる英文">
+        <div class="tools">
+          <button class="chip primary" id="talkBtn" type="button">話させる</button>
+          <button class="chip" id="talkStop" type="button">止める</button>
+        </div>
+        <div class="sub">口の形（4案）・話している間だけ出ます</div>
+        <div class="styles" id="mouths"></div>
+        <div class="tools">
+          <button class="chip" id="mouthNone" type="button" aria-pressed="false">口なし（目だけで話す）</button>
+        </div>
+        <div class="chips" id="talkOpts"></div>
+        <div class="slider">
+          <div class="slider-head"><label for="voice">声</label></div>
+          <select class="text-in" id="voice"></select>
+        </div>
+        <div class="slider">
+          <div class="slider-head">
+            <label for="pitch">声の高さ</label>
+            <span class="readout" id="pitchOut">1.30</span>
+          </div>
+          <input type="range" id="pitch" min="0.5" max="2" step="0.05" value="1.3">
+        </div>
+        <div class="slider">
+          <div class="slider-head">
+            <label for="rate">話す速さ</label>
+            <span class="readout" id="rateOut">×1.00</span>
+          </div>
+          <input type="range" id="rate" min="0.6" max="1.4" step="0.05" value="1">
+        </div>
+        <div class="hint keep" id="talkHint">「音を出す」が入っていると、スピーカーから英語が流れます。</div>
+      </div>
+
+      <div class="slider">
+        <div class="slider-head">
+          <label for="away">席を外してからの時間</label>
+          <span class="readout" id="awayOut">0 分</span>
+        </div>
+        <input type="range" id="away" min="0" max="60" step="1" value="0">
+        <div class="hint" id="awayHint">席を外した直後。元気に見回します。</div>
+        <div class="hint" data-only="settings">ここで動かすのは、この画面の見本だけです。モニターの目は、実際に席を外してからの時間でだんだん眠くなります。</div>
+      </div>
+
+      <div class="slider">
+        <div class="slider-head">
+          <label for="speed">動きの速さ</label>
+          <span class="readout" id="speedOut">ふつう ×1.0</span>
+        </div>
+        <input type="range" id="speed" min="0.6" max="1.6" step="0.1" value="1">
+      </div>
+
+      <div class="tools">
+        <button class="chip" id="fs" type="button">全画面で見る</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="note">
+    <p data-only="settings">映すもの（目・時計・画像）と時計の下の文言は、同じフォルダの「モニター表示設定.txt」で切り替えられます。</p>
+    <p>全画面は「全画面で見る」・F キー・ダブルクリックのどれでも。戻るときは <strong>Esc</strong>。全画面の間は右上の調整パネルでつまみを動かせます（マウスを止めると消え、<strong>H</strong> キーで出し入れ）。</p>
+    <p data-only="web">つまみの値は<strong>このブラウザに保存</strong>され、次に開いたときも残ります。「設定をコピー」を押すと、チャットに貼れる形でコピーされます。</p>
+    <p data-only="web">iPad では、Safari の共有ボタンから<strong>「ホーム画面に追加」</strong>して開くと、目だけが画面いっぱいに映ります（<a href="?app=ipad" style="color: var(--accent)">目だけを映す</a>）。画面をタップすると調整パネルが出ます。</p>
+    <p>英語の声は、このパソコンに入っている読み上げの声を使います。名前に「（ネット経由）」と付いた声を選ぶと、話す英文がその声の提供元（Google や Microsoft）へ送られます。</p>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ---------- 目の形と色 ----------
+  // 大きさは画面の高さに対する割合。
+  //   stops    … 目の地の色（中心→縁）。縁はにじみの色に近づけておく（暗い縁は輪郭線に見える）
+  //   core     … 光の芯（黒目の代わり）の色。coreEdge はその外側
+  //   rim      … 下ふちに映り込む光の色。specA はつや（白い点）の濃さ
+  //   形（type: 'blob'）… 超楕円（円と四角の中間）で描く。n が 2 で円、大きいほど四角に近づく
+  //     nTop / nBot … 上半分・下半分の丸み。taper … 上側をどれだけ細くするか。tilt … 目尻を下げる角度
+  const AMBER = {
+    stops: ['#ffc566', '#ffb04a', '#fb9a37', '#f3862a', '#ec7a22'], glow: '255,138,38', glowA: 1,
+    core: '255,248,228', coreEdge: '255,206,120', rim: '255,228,165', specA: .85,
+  };
+  const STYLES = {
+    soft:  { name: 'やわらか角丸', desc: '試作 4 の形から、角の硬さだけを取った形', type: 'blob',
+             w: .25, h: .29, nTop: 2.7, nBot: 3.0, taper: .04, tilt: 0, gap: .39, ...AMBER },
+    egg:   { name: 'たまご', desc: '上がすこし細く、下がふっくら。やさしい印象', type: 'blob',
+             w: .25, h: .30, nTop: 2.3, nBot: 2.8, taper: .13, tilt: 0, gap: .39, ...AMBER },
+    round: { name: 'まんまる', desc: 'ほぼ円。幼く、かわいらしい印象', type: 'blob',
+             w: .265, h: .275, nTop: 2.25, nBot: 2.35, taper: 0, tilt: 0, gap: .40, ...AMBER },
+    droop: { name: 'たれ目', desc: '上は丸く、下はなだらか。目尻をわずかに下げた、おだやかな目', type: 'blob',
+             w: .27, h: .265, nTop: 2.2, nBot: 3.6, taper: .06, tilt: .12, gap: .41, ...AMBER },
+  };
+  // 口の形（話している間だけ出る）。目と同じ層に描くので、輪郭のぼかし・まわりの光・色は目とそろう
+  const MOUTH_SHAPES = {
+    smile: { name: 'ほほえみ', desc: '閉じると笑った口の線。声に合わせて下へふくらむ' },
+    oval:  { name: 'まる口', desc: '目と同じ丸み。声に合わせて縦に開く' },
+    bar:   { name: 'ひとすじ', desc: '横長の光。声に合わせて厚みが変わる' },
+    dots:  { name: '光の粒', desc: '三つの小さな光が、声に合わせて伸び縮みする' },
+  };
+  const OLD_STYLE = { type: 'rrect', w: .25, h: .29, r: .36, gap: .39, ...AMBER };   // 試作 4 の形（比べる用）
+  const STOP_POS = [0, .18, .45, .78, 1];
+  // にじみの重ね方：[ぼかし幅（目の幅に対する割合）, 濃さ]。細く濃い光から、広く淡い光へ
+  const GLOW_LAYERS = [[.03, .9], [.08, .6], [.18, .4], [.38, .24], [.75, .14], [1.3, .08]];
+
+  // ---------- 色 ----------
+  // 琥珀の色を色相環の上で回し（色合い）、灰色へ寄せる（あざやかさ）。明るさの段差は琥珀のまま残すので、
+  // どの色でも「中心が明るく、縁へ深くなる」光り方は変わらない
+  const TONES = [
+    { name: '琥珀', hue: 0, sat: 1 },
+    { name: 'レモン', hue: 18, sat: 1 },
+    { name: '夕焼け', hue: -16, sat: 1 },
+    { name: '桜', hue: -56, sat: .75 },
+    { name: '藤', hue: -118, sat: .6 },
+    { name: '若草', hue: 62, sat: .8 },
+    { name: '水色', hue: 164, sat: .9 },
+    { name: '白', hue: 0, sat: .15 },
+  ];
+  const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+  // [r, g, b] の色合いを hue 度回し、あざやかさを sat 倍して 'r,g,b' で返す
+  function retone(rgb, hue, sat) {
+    const [r, g, b] = rgb.map(v => v / 255);
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    let h = 0, s = 0;
+    if (d > 1e-6) {
+      s = d / (1 - Math.abs(2 * l - 1));
+      h = 60 * (mx === r ? (g - b) / d : mx === g ? (b - r) / d + 2 : (r - g) / d + 4);
+    }
+    h = (((h + hue) % 360) + 360) % 360;
+    s = Math.min(1, s * sat);
+    const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+    const [R, G, B] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return [R, G, B].map(v => Math.round((v + m) * 255)).join(',');
+  }
+  const paletteMemo = new Map();
+  function palette(hue, sat) {
+    const key = hue + '|' + sat;
+    if (!paletteMemo.has(key)) {
+      const t = s => retone(s.split(',').map(Number), hue, sat);
+      paletteMemo.set(key, {
+        stops: AMBER.stops.map(h => 'rgb(' + retone(hexRgb(h), hue, sat) + ')'),
+        glow: t(AMBER.glow), core: t(AMBER.core), coreEdge: t(AMBER.coreEdge), rim: t(AMBER.rim),
+      });
+    }
+    return paletteMemo.get(key);
+  }
+
+  // ---------- 描画 ----------
+  // cx = 目の中心、top = 上端。side: -1 = 画面左の目、+1 = 画面右の目
+  function eyePath(c, st, cx, top, w, h, side) {
+    c.beginPath();
+    if (st.type === 'rrect') {
+      const x = cx - w / 2, y = top;
+      const r = Math.min(Math.min(w, h) * st.r, w / 2, h / 2);
+      c.moveTo(x + r, y);
+      c.arcTo(x + w, y, x + w, y + h, r);
+      c.arcTo(x + w, y + h, x, y + h, r);
+      c.arcTo(x, y + h, x, y, r);
+      c.arcTo(x, y, x + w, y, r);
+      c.closePath();
+      return;
+    }
+    // 角のない丸み（超楕円）。上下で丸みを変え、上側を少し細くし、目尻側へわずかに傾ける
+    const a = w / 2, b = h / 2, cy = top + b, N = 120;
+    const rot = st.tilt * side, cr = Math.cos(rot), sr = Math.sin(rot);
+    for (let i = 0; i < N; i++) {
+      const th = i / N * Math.PI * 2, co = Math.cos(th), si = Math.sin(th);
+      const n = si < 0 ? st.nTop : st.nBot;
+      const v = Math.sign(si) * Math.pow(Math.abs(si), 2 / n);                       // -1 = 上端、+1 = 下端
+      const u = Math.sign(co) * Math.pow(Math.abs(co), 2 / n) * (1 - st.taper * (1 - v) / 2);
+      const px = u * a, py = v * b;
+      const X = cx + px * cr - py * sr, Y = cy + px * sr + py * cr;
+      if (i) c.lineTo(X, Y); else c.moveTo(X, Y);
+    }
+    c.closePath();
+  }
+
+  // side: -1 = 画面左の目、+1 = 画面右の目
+  function drawEye(c, st, x, y, w, h, f, side) {
+    const hh = Math.max(h * (1 - 0.93 * f.squash), h * 0.06);      // まばたき・眠りで縦につぶれる
+    const top = y - hh / 2 + (h - hh) * 0.12;                        // 閉じるときは少し下へ
+    c.save();
+
+    // 上まぶた（眠い・じーっ）。slant > 0 で目頭側が下がる
+    const lt = Math.min(0.95, f.lidTop + (side > 0 ? f.asym : 0));
+    if (lt > 0.001 || Math.abs(f.slant) > 0.001) {
+      const inner = side < 0 ? 1 : -1;
+      const ty = top + lt * hh;
+      const yAt = px => ty + f.slant * hh * 0.35 * ((px - x) / (w / 2)) * inner;
+      const xa = x - w, xb = x + w;
+      c.beginPath();
+      c.moveTo(xa, yAt(xa)); c.lineTo(xb, yAt(xb));
+      c.lineTo(xb, y + h * 2); c.lineTo(xa, y + h * 2);
+      c.closePath(); c.clip();
+    }
+    // 下まぶた（うれしい）。下から楕円で削って「^」の形にする
+    if (f.lidBot > 0.001) {
+      c.beginPath();
+      c.rect(x - w * 2, y - h * 2, w * 4, h * 4);
+      c.ellipse(x, top + hh * 1.18, w * 0.9, hh * (0.2 + 0.62 * f.lidBot), 0, 0, Math.PI * 2);
+      c.clip('evenodd');
+    }
+
+    // ここから先は目の形の中だけに描く
+    eyePath(c, st, x, top, w, hh, side);
+    c.clip();
+    const bx0 = x - w, by0 = top - hh, bw = w * 2, bh = hh * 3;
+
+    // 1) 地の色。中心がやや明るく、縁へ向かって深い橙
+    const bx = x + f.gx * w * 0.1, by = top + hh * 0.45;
+    const g = c.createRadialGradient(bx, by, 0, bx, by, Math.max(w, hh) * 0.78);
+    STOP_POS.forEach((p, i) => g.addColorStop(p, st.stops[i]));
+    c.fillStyle = g;
+    c.fillRect(bx0, by0, bw, bh);
+
+    // 2) 下ふちに映り込む光。目の輪郭に沿った細い弧で、ガラス玉のような丸みに見せる
+    c.save();
+    c.translate(x, top + hh * .5); c.scale(w * .5, hh * .5);
+    const rg = c.createRadialGradient(0, -.35, 0, 0, -.35, 1.32);
+    rg.addColorStop(.8, `rgba(${st.rim},0)`);
+    rg.addColorStop(.93, `rgba(${st.rim},.22)`);
+    rg.addColorStop(1, `rgba(${st.rim},0)`);
+    c.fillStyle = rg;
+    c.fillRect(-2, -2, 4, 4);
+    c.restore();
+
+    // 3) 光の芯（黒目の代わり）。視線より少し遅れてついてくる。
+    //    驚くと大きく、集中すると小さくなる（瞳孔のように）
+    const ccx = x + f.cgx * w * 0.24, ccy = top + hh * 0.5 + f.cgy * hh * 0.22;
+    c.save();
+    c.translate(ccx, ccy);
+    c.scale(w * 0.37 * f.core, hh * 0.37 * f.core);
+    const cg = c.createRadialGradient(0, 0, 0, 0, 0, 1);
+    cg.addColorStop(0, `rgba(${st.core},1)`);
+    cg.addColorStop(.32, `rgba(${st.core},.93)`);
+    cg.addColorStop(.68, `rgba(${st.coreEdge},.45)`);
+    cg.addColorStop(1, `rgba(${st.coreEdge},0)`);
+    c.fillStyle = cg;
+    c.fillRect(-1.2, -1.2, 2.4, 2.4);
+    c.restore();
+
+    // 4) つや（白い映り込み）。目を細めると消え、視線とは少し逆へずれる
+    const open = clamp((hh / h - .3) / .35, 0, 1) * (1 - f.lidBot * .6);
+    if (open > 0.01) {
+      const a = open * st.specA;
+      spec(c, x - w * 0.2 - f.gx * w * 0.05, top + hh * 0.21 - f.gy * hh * 0.03, w * 0.105, hh * 0.065, -0.5, a);
+      spec(c, x + w * 0.22 - f.gx * w * 0.03, top + hh * 0.75, w * 0.034, w * 0.034, 0, a * 0.5);
+    }
+    c.restore();
+  }
+
+  function spec(c, x, y, rx, ry, rot, a) {
+    c.save();
+    c.translate(x, y); c.rotate(rot); c.scale(rx, ry);
+    const g = c.createRadialGradient(0, 0, 0, 0, 0, 1);
+    g.addColorStop(0, `rgba(255,255,255,${a})`);
+    g.addColorStop(.45, `rgba(255,255,255,${a * .65})`);
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    c.fillStyle = g;
+    c.beginPath(); c.arc(0, 0, 1, 0, Math.PI * 2); c.fill();
+    c.restore();
+  }
+
+  // 口。w, h は目の幅・高さ（伸び縮みを除いた大きさ）、f.mouth.o は声の大きさ（0 = 閉じる、1 = いちばん開く）
+  function drawMouth(c, st, w, h, f) {
+    const m = f.mouth, o = clamp(m.o, 0, 1);
+    const x0 = (f.gx || 0) * w * .12, y0 = h * .8;   // 目の下端の少し下。横を向くと、目より少し先に動く（顔の丸み）
+    c.save();
+    c.globalAlpha = clamp(m.vis, 0, 1) * .92;
+    c.beginPath();
+    if (m.mode === 'smile') {
+      // 両端の上がった帯。端は丸く、閉じると細い笑みの線、開くと下側がふくらむ
+      const hw = w * .3, e = h * .06, yc = y0 - h * .07;
+      const top = h * (.16 - .12 * o), bot = h * (.24 + .34 * o);
+      c.moveTo(x0 - hw, yc);
+      c.quadraticCurveTo(x0, yc + top, x0 + hw, yc);
+      c.arc(x0 + hw, yc + e / 2, e / 2, -Math.PI / 2, Math.PI / 2);
+      c.quadraticCurveTo(x0, yc + e + bot, x0 - hw, yc + e);
+      c.arc(x0 - hw, yc + e / 2, e / 2, Math.PI / 2, Math.PI * 1.5);
+      c.closePath();
+    } else if (m.mode === 'oval') {
+      superEllipse(c, x0, y0, w * (.19 + .02 * o), h * (.05 + .16 * o), 2.5);
+    } else if (m.mode === 'bar') {
+      const hw = w * (.31 - .05 * o), hh = h * (.045 + .1 * o);
+      c.roundRect(x0 - hw, y0 - hh, hw * 2, hh * 2, hh);
+    } else {
+      for (let i = -1; i <= 1; i++) {
+        const ph = .6 + .4 * Math.sin(m.t * 9 + i * 2.1);
+        const r = w * .075, hh = r * (1 + 2.2 * o * ph * (i ? .8 : 1));
+        c.roundRect(x0 + i * w * .25 - r, y0 - hh, r * 2, hh * 2, r);
+      }
+    }
+    c.clip();
+    // 地の色は目と同じ並び（中心が明るく、縁へ深く）。中心に、声が大きいほど明るくなる光の芯
+    const g = c.createRadialGradient(x0, y0 - h * .03, 0, x0, y0, w * .42);
+    STOP_POS.forEach((p, i) => g.addColorStop(p, st.stops[i]));
+    c.fillStyle = g;
+    c.fillRect(x0 - w, y0 - h, w * 2, h * 2);
+    const cg = c.createRadialGradient(x0, y0, 0, x0, y0, w * (.15 + .1 * o));
+    cg.addColorStop(0, `rgba(${st.core},${.45 + .35 * o})`);
+    cg.addColorStop(1, `rgba(${st.coreEdge},0)`);
+    c.fillStyle = cg;
+    c.fillRect(x0 - w, y0 - h, w * 2, h * 2);
+    c.restore();
+  }
+  function superEllipse(c, cx, cy, a, b, n) {
+    for (let i = 0; i < 64; i++) {
+      const th = i / 64 * Math.PI * 2, co = Math.cos(th), si = Math.sin(th);
+      const X = cx + a * Math.sign(co) * Math.pow(Math.abs(co), 2 / n);
+      const Y = cy + b * Math.sign(si) * Math.pow(Math.abs(si), 2 / n);
+      if (i) c.lineTo(X, Y); else c.moveTo(X, Y);
+    }
+    c.closePath();
+  }
+
+  // 作業用の画面（目そのもの・ぼかしの型・輪郭をぼかした目・縮小して描く広いにじみ）
+  function makeBuffers() {
+    const mk = () => document.createElement('canvas');
+    return { layer: mk(), mask: mk(), soft: mk(), glow: mk() };
+  }
+  function fit(cnv, W, H) { if (cnv.width !== W || cnv.height !== H) { cnv.width = W; cnv.height = H; } return cnv.getContext('2d'); }
+
+  // look: { feather: 輪郭のぼかし（目の幅に対する割合）, spread: 光の広がりの倍率 }
+  function drawFace(c, buf, W, H, st, f, look) {
+    const layer = buf.layer;
+    const l = fit(layer, W, H);
+    l.setTransform(1, 0, 0, 1, 0, 0);
+    l.clearRect(0, 0, W, H);
+    // 視線をすばやく動かした方向へ、目が少し伸びる（動きの勢いを見せる）
+    const ew = st.w * H * f.scale * (1 + f.sx - f.sy * .4), eh = st.h * H * f.scale * (1 + f.sy - f.sx * .4);
+    const half = st.gap * look.gap * H * f.scale / 2 * (1 - 0.07 * Math.abs(f.gx));
+    l.translate(f.cx, f.cy);
+    l.rotate(f.tilt);
+    for (const side of [-1, 1]) {
+      // 横を向くと、向いた側の目が細くなる（顔が回ったように見せる）
+      const turn = f.gx * side;
+      const wf = 1 - Math.max(0, turn) * 0.14 + Math.max(0, -turn) * 0.04;
+      const hf = 1 - Math.max(0, turn) * 0.04;
+      drawEye(l, st, side * half, 0, ew * wf, eh * hf, f, side);
+    }
+    // 口も同じ層に描く（このあとの輪郭のぼかし・光のにじみが、目と同じようにかかる）
+    if (f.mouth && f.mouth.mode !== 'none' && f.mouth.vis > .01) drawMouth(l, st, st.w * H * f.scale, st.h * H * f.scale, f);
+
+    const OFF = W * 3;   // 本体を画面の外に置き、影だけをずらし込んで描くための距離
+
+    // 輪郭をぼかした目を作る：
+    //   ぼかしの型 = 目の形の影（影はぼけて描かれる）
+    //   縁の色で塗った上に目を重ね、型で切り抜く → 縁が外へふわっと溶ける
+    let body = layer;
+    const feather = ew * look.feather;
+    if (feather > 0.5) {
+      const m = fit(buf.mask, W, H);
+      m.setTransform(1, 0, 0, 1, 0, 0);
+      m.clearRect(0, 0, W, H);
+      m.shadowOffsetX = OFF; m.shadowColor = '#000'; m.shadowBlur = feather;
+      m.drawImage(layer, -OFF, 0);
+      m.shadowColor = 'transparent'; m.shadowOffsetX = 0;
+
+      const s = fit(buf.soft, W, H);
+      s.setTransform(1, 0, 0, 1, 0, 0);
+      s.globalCompositeOperation = 'source-over';
+      s.fillStyle = st.stops[st.stops.length - 1];
+      s.fillRect(0, 0, W, H);
+      s.drawImage(layer, 0, 0);
+      s.globalCompositeOperation = 'destination-in';
+      s.drawImage(buf.mask, 0, 0);
+      s.globalCompositeOperation = 'source-over';
+      body = buf.soft;
+    }
+
+    // 光のにじみ：ぼかし幅の違う光を細い順に重ねて、遠くへなだらかに消えていくようにする。
+    // 広いにじみは縮小した画面で描いて引き伸ばす（大きなモニターでも同じ広がりで、軽い）
+    const q = Math.max(2, Math.round(H / 360));
+    const gw = Math.ceil(W / q), gh = Math.ceil(H / q), GOFF = gw * 3;
+    const gl = fit(buf.glow, gw, gh);
+    gl.setTransform(1, 0, 0, 1, 0, 0);
+    gl.clearRect(0, 0, gw, gh);
+    gl.shadowOffsetX = GOFF;
+    let wide = false;
+    c.save();
+    c.globalAlpha = f.bright;
+    c.shadowOffsetX = OFF;
+    for (const [blur, alpha] of GLOW_LAYERS) {
+      const b = ew * blur * look.spread, color = `rgba(${st.glow},${Math.min(1, alpha * st.glowA * look.glow)})`;
+      if (b / q < 24) {
+        c.shadowColor = color; c.shadowBlur = b;
+        c.drawImage(body, -OFF, 0);
+      } else {
+        gl.shadowColor = color; gl.shadowBlur = Math.min(b / q, 400);
+        gl.drawImage(body, -GOFF, 0, gw, gh);
+        wide = true;
+      }
+    }
+    c.shadowColor = 'transparent'; c.shadowOffsetX = 0;
+    if (wide) { c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high'; c.drawImage(buf.glow, 0, 0, W, H); }
+    c.drawImage(body, 0, 0);
+    c.restore();
+  }
+
+  // ---------- 飾り（うれしいときの光の粒・寝ているときの Z） ----------
+  // 位置と大きさは画面の高さを 1 とした値で持つ（画面の大きさが変わってもずれない）
+  const particles = [];
+  // 光の筋の向き。本物のレンズの光条と同じく、すべての粒でそろえる（ばらばらだと作り物に見える）
+  const GLINT_ANGLE = -.12;
+  function sparkle(t, st, face) {
+    let at = t;
+    for (let i = 0; i < 11; i++) {
+      // 目の上半分の輪郭の少し外側に、目尻寄りを多めに、ぽつぽつと順に光る
+      const side = i % 2 ? 1 : -1;
+      const phi = -Math.PI / 2 + side * rand(-.55, 1.35);
+      const ex = face.x + side * st.gap * look.gap / 2;
+      particles.push({ kind: 'glint', t0: at, life: rand(.7, 1.3),
+        x: ex + Math.cos(phi) * st.w / 2 * rand(1.15, 1.6),
+        y: face.y + Math.sin(phi) * st.h / 2 * rand(1.08, 1.45),
+        vx: Math.cos(phi) * .012, vy: -rand(.008, .025),
+        r: .008 + .02 * Math.pow(Math.random(), 2),        // 小さい粒が多く、大きい粒はまれ
+        twice: Math.random() < .45, seed: rand(0, 6) });
+      at += rand(.05, .13);
+    }
+    // 光の筋のない、小さな光の粒。ゆっくり昇って消える
+    for (let i = 0; i < 6; i++) {
+      const side = i % 2 ? 1 : -1;
+      particles.push({ kind: 'mote', t0: t + rand(0, .8), life: rand(1.6, 2.6),
+        x: face.x + side * (st.gap * look.gap / 2 + rand(-.3, .7) * st.w), y: face.y - st.h * rand(.35, .75),
+        vx: rand(-.01, .01), vy: -rand(.02, .04), r: .003 + .004 * Math.random(), seed: rand(0, 6) });
+    }
+  }
+  function snore(t, st, face) {
+    particles.push({ kind: 'z', t0: t, life: 3.4,
+      x: face.x + st.gap * look.gap / 2 + st.w * .45, y: face.y - st.h * .5,
+      vx: .025, vy: -.055, size: .036, rot: -.18, spin: .1, seed: Math.random() * 6 });
+  }
+  // きらめきの明るさ：すっと点いて、尾を引いて消える。半分ほどは途中でもう一度またたく
+  function glintEnv(p, u, age) {
+    let e = u < .12 ? Math.pow(u / .12, 1.5) : Math.exp(-(u - .12) * 4.2);
+    if (p.twice) e += .55 * Math.exp(-Math.pow((u - .58) / .07, 2));
+    e *= 1 - Math.pow(u, 6);
+    return clamp(e * (1 + .1 * Math.sin(age * 34 + p.seed)), 0, 1);
+  }
+  // 光の筋：細い楕円の中を、中心から先へ向かって薄くしていく
+  function streak(c, x, y, len, th, ang, a, st) {
+    c.save();
+    c.translate(x, y); c.rotate(ang); c.scale(len, th);
+    const g = c.createRadialGradient(0, 0, 0, 0, 0, 1);
+    g.addColorStop(0, `rgba(255,251,238,${a})`);
+    g.addColorStop(.22, `rgba(${st.rim},${a * .5})`);
+    g.addColorStop(.6, `rgba(${st.glow},${a * .12})`);
+    g.addColorStop(1, `rgba(${st.glow},0)`);
+    c.fillStyle = g;
+    c.beginPath(); c.arc(0, 0, 1, 0, Math.PI * 2); c.fill();
+    c.restore();
+  }
+  function drawGlint(c, X, Y, R, a, st, H, withStreaks) {
+    const g = c.createRadialGradient(X, Y, 0, X, Y, R);
+    g.addColorStop(0, `rgba(255,253,244,${a})`);
+    g.addColorStop(.18, `rgba(${st.core},${a * .8})`);
+    g.addColorStop(.5, `rgba(${st.glow},${a * .22})`);
+    g.addColorStop(1, `rgba(${st.glow},0)`);
+    c.fillStyle = g;
+    c.beginPath(); c.arc(X, Y, R, 0, Math.PI * 2); c.fill();
+    if (!withStreaks) return;
+    // 明るい瞬間ほど筋が長く伸びる（横の筋を長めに）
+    const th = Math.max(R * .07, H * .0006);
+    streak(c, X, Y, R * (1.6 + 3.6 * a), th, GLINT_ANGLE, a * .9, st);
+    streak(c, X, Y, R * (1.1 + 2.4 * a), th, GLINT_ANGLE + Math.PI / 2, a * .65, st);
+  }
+  function drawZ(c, W, H, st, p, age, u) {
+    const x = p.x + p.vx * age + Math.sin(age * 2.2 + p.seed) * .012, y = p.y + p.vy * age;
+    const r = p.size * (.7 + u * .9) * H, a = clamp(Math.min(1, u * 5) * (1 - u) * 1.2, 0, 1);
+    if (r < .5 || a <= 0) return;
+    c.save();
+    c.globalAlpha = a;
+    c.translate(W / 2 + x * H, H / 2 + y * H);
+    c.rotate(p.rot + p.spin * age);
+    c.shadowColor = `rgba(${st.glow},.95)`;
+    c.shadowBlur = r * 1.3;
+    c.beginPath(); c.moveTo(-r * .5, -r * .5); c.lineTo(r * .5, -r * .5); c.lineTo(-r * .5, r * .5); c.lineTo(r * .5, r * .5);
+    c.lineWidth = r * .2; c.lineJoin = 'round'; c.lineCap = 'round';
+    c.strokeStyle = `rgb(${st.rim})`; c.stroke();
+    c.restore();
+  }
+  function drawParticles(c, W, H, st, t, bright) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i], age = t - p.t0;
+      if (age > p.life) { particles.splice(i, 1); continue; }
+      if (age < 0) continue;
+      const u = age / p.life;
+      if (p.kind === 'z') { drawZ(c, W, H, st, p, age, u); continue; }
+      let x = p.x + p.vx * age, y = p.y + p.vy * age, a, R;
+      if (p.kind === 'glint') { a = glintEnv(p, u, age); R = p.r * H * (.75 + .25 * a); }
+      else { x += Math.sin(age * 1.7 + p.seed) * .006; a = Math.pow(Math.sin(Math.PI * u), 1.5) * .7; R = p.r * H; }
+      a *= bright;
+      if (a < .004 || R < .5) continue;
+      c.save();
+      c.globalCompositeOperation = 'lighter';   // 光は足し算で重ねる
+      drawGlint(c, W / 2 + x * H, H / 2 + y * H, R, a, st, H, p.kind === 'glint');
+      c.restore();
+    }
+  }
+
+  // ---------- 状態 ----------
+  const $ = s => document.querySelector(s);
+  const APP = document.documentElement.dataset.app;   // '' / 'monitor' / 'settings'
+  const stage = $('#stage'), cv = $('#eyes'), ctx = cv.getContext('2d');
+  const buf = makeBuffers();
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const tri = () => Math.random() + Math.random() - 1;           // -1..1、真ん中寄り
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 保存できなくても動く */ } },
+  };
+
+  let styleKey = store.get('eyes5.shape', 'egg');
+  if (!STYLES[styleKey]) styleKey = 'egg';
+  let speed = clamp(parseFloat(store.get('eyes.speed', '1')) || 1, .6, 1.6);
+  let minutes = 0;
+  // 形・色・光り方の調整。値はこのブラウザに保存され、次に開いたときも残る。
+  // def（初期値）は 試作 7 で決めてもらった値。scale 倍した数がつまみの目盛り
+  const num = (k, d, a, b) => { const v = parseFloat(store.get(k, String(d))); return isNaN(v) ? d : clamp(v, a, b); };
+  const LOOK_DEF = [
+    { key: 'size', store: 'eyes8.size', def: 1, min: .7, max: 1.4, scale: 1, label: '大きさ', text: v => '×' + v.toFixed(2) },
+    { key: 'gap', store: 'eyes6.gap', def: 1.14, min: .86, max: 1.5, scale: 1, label: '間隔', text: v => '×' + v.toFixed(2) },
+    // 顔の高さ（画面の高さに対する割合。プラスで上へ）。左右は常に中央
+    { key: 'rise', store: 'eyes10.rise', def: .04, min: -.2, max: .2, scale: 100, label: '高さ',
+      text: v => (Math.round(v * 100) === 0 ? '中央' : (v > 0 ? '上へ ' : '下へ ') + Math.abs(Math.round(v * 100)) + '%') },
+    { key: 'hue', store: 'eyes8.hue', def: 0, min: -180, max: 180, scale: 1, label: '色合い', text: v => (v > 0 ? '+' : '') + Math.round(v) + '°' },
+    { key: 'sat', store: 'eyes8.sat', def: 1, min: 0, max: 1, scale: 100, label: 'あざやかさ', text: v => Math.round(v * 100) + '%' },
+    { key: 'feather', store: 'eyes4.feather', def: .1, min: 0, max: .25, scale: 100, label: 'ぼかし', text: v => String(Math.round(v * 100)) },
+    { key: 'spread', store: 'eyes4.spread', def: 1.2, min: .5, max: 2.5, scale: 1, label: '広がり', text: v => '×' + v.toFixed(1) },
+    { key: 'bright', store: 'eyes6.bright', def: .65, min: .2, max: 1, scale: 100, label: '明るさ', text: v => Math.round(v * 100) + '%' },
+    { key: 'glow', store: 'eyes6.glow', def: .6, min: 0, max: 2, scale: 1, label: 'まわりの光', text: v => '×' + v.toFixed(1) },
+  ];
+  const look = {};
+  for (const d of LOOK_DEF) look[d.key] = num(d.store, d.def, d.min, d.max);
+  let compare = false;   // true の間は試作 4 の形（角丸の四角）で描く
+
+  // いま描く目 = 形（STYLES）に、色と大きさの調整を重ねたもの。値が変わったときだけ作り直す
+  function makeStyle(base) {
+    const z = look.size;
+    return { ...base, ...palette(look.hue, look.sat), w: base.w * z, h: base.h * z, gap: base.gap * z };
+  }
+  let styleMemo = '', styleNow = null;
+  function curStyle() {
+    const key = [styleKey, compare, look.hue, look.sat, look.size].join('|');
+    if (key !== styleMemo) { styleMemo = key; styleNow = makeStyle(compare ? OLD_STYLE : STYLES[styleKey]); }
+    return styleNow;
+  }
+
+  // 目標値へなめらかに近づく値。k が大きいほど速い
+  const A = {
+    gx: { v: 0, t: 0, k: 20 }, gy: { v: 0, t: 0, k: 20 },
+    cgx: { v: 0, t: 0, k: 11 }, cgy: { v: 0, t: 0, k: 11 },   // 光の芯は視線より少し遅れてついてくる
+    core: { v: 1, t: 1, k: 5 },                                // 光の芯の大きさ（瞳孔のように開く・すぼまる）
+    tilt: { v: 0, t: 0, k: 5 }, scale: { v: 1, t: 1, k: 9 },
+    lidTop: { v: 0, t: 0, k: 7 }, slant: { v: 0, t: 0, k: 7 },
+    lidBot: { v: 0, t: 0, k: 8 }, asym: { v: 0, t: 0, k: 7 },
+    bright: { v: 1, t: 1, k: 3 }, closed: { v: 0, t: 0, k: 4 }, lift: { v: 0, t: 0, k: 10 },
+  };
+  const nowEl = $('#now');
+  const setNow = s => { if (nowEl.textContent !== s) nowEl.textContent = s; };
+
+  const sleepLevel = () => clamp((minutes - 5) / 40, 0, 1);
+  const isAsleep = () => minutes >= 50;
+
+  // ---------- まばたき ----------
+  const blink = { start: -1, dur: .17, queue: 0 };
+  let nextBlink = 0;
+  function startBlink(t, slow) {
+    blink.dur = slow ? .55 : .2 + .25 * sleepLevel();
+    blink.start = t;
+    blink.queue = Math.random() < .18 ? 1 : 0;
+  }
+  // 0 = 開いている、1 = 閉じている。負の値はふだんより少し見開いた状態
+  function blinkValue(t) {
+    if (blink.start < 0) return 0;
+    const p = (t - blink.start) / blink.dur;
+    if (p < 0) return 0;
+    if (p >= 1) {
+      if (blink.queue > 0) { blink.queue--; blink.start = t + .07; }
+      else { blink.start = -1; nextBlink = t + rand(2.2, 5.5) * (1 + 1.5 * sleepLevel()); }
+      return 0;
+    }
+    // 閉じる直前にほんの少し見開き（ため）、開いたあとは少し行き過ぎてから落ち着く
+    if (p < .14) return -.07 * Math.sin(Math.PI * p / .14);
+    if (p < .5) return Math.pow((p - .14) / .36, 2);
+    if (p < .86) return 1 - Math.pow((p - .5) / .36, .8);
+    return -.05 * Math.sin(Math.PI * (p - .86) / .14);
+  }
+
+  // ---------- 表情 ----------
+  const EMOTES = {
+    happy: { label: 'うれしい', dur: 2.4,
+      start(t) { A.lidBot.t = .9; A.lidTop.t = 0; A.slant.t = 0; A.scale.t = 1.04; A.gx.t *= .3; A.gy.t = -.15; A.core.t = 1.12;
+                 if (!reduceMotion) sparkle(t + .15, curStyle(), face); },
+      tick(t, e) { if (!reduceMotion) A.lift.t = -Math.abs(Math.sin((t - e.t0) * 8)) * .02 * (1 - (t - e.t0) / e.dur); } },
+    surprise: { label: 'おどろき', dur: 1.4,
+      start() { A.scale.k = 24; A.scale.t = 1.2; A.lidTop.t = 0; A.lidBot.t = 0; A.slant.t = 0; A.gx.t = 0; A.gy.t = -.1;
+                A.core.k = 14; A.core.t = 1.3; },
+      end() { A.scale.k = 9; A.core.k = 5; } },
+    sleepy: { label: 'ねむい', dur: 3.6,
+      start(t) { A.lidTop.t = .55; A.slant.t = -.15; A.gy.t = .25; A.gx.t *= .5; A.core.t = .88; startBlink(t + .8, true); blink.start = t + .9; blink.dur = .6; } },
+    yawn: { label: 'あくび', dur: 3.6,
+      start() { A.gx.t *= .3; A.gy.t = -.1; A.lidTop.t = 0; A.lidBot.t = 0; },
+      tick(t, e) {
+        const p = (t - e.t0) / e.dur;
+        if (p < .34) {          // ぎゅっと目をつぶって伸びをする
+          A.closed.k = 3; A.closed.t = .84; A.scale.t = 1.07; A.slant.t = .3; A.core.t = .85; A.lift.t = -.014;
+        } else if (p < .56) {   // ふあっと見開く
+          A.closed.k = 8; A.closed.t = 0; A.scale.t = 1.12; A.slant.t = 0; A.core.t = 1.22; A.lift.t = 0;
+        } else {                // とろんとして、ゆっくりまばたき
+          A.scale.t = 1; A.lidTop.t = .5; A.slant.t = -.12; A.core.t = .9; A.gy.t = .2;
+          if (!e.blinked) { e.blinked = true; startBlink(t + .35, true); blink.queue = 0; }
+        }
+      },
+      end() { A.closed.k = 4; } },
+    look: { label: 'きょろきょろ', dur: 2.6,
+      start() { A.lidTop.t = Math.min(A.lidTop.t, .1); },
+      tick(t, e) {
+        const seq = [[-.85, -.1], [.85, -.05], [-.55, .18], [0, 0]];
+        const i = Math.min(seq.length - 1, Math.floor((t - e.t0) / (e.dur / seq.length)));
+        A.gx.t = seq[i][0]; A.gy.t = seq[i][1];
+      } },
+    focus: { label: 'じーっ', dur: 2.8,
+      start() { A.lidTop.t = .34; A.slant.t = .4; A.gx.t = 0; A.gy.t = 0; A.scale.t = .96; A.core.t = .76; } },
+    curious: { label: 'はてな', dur: 2.6,
+      start() { const s = Math.random() < .5 ? -1 : 1; A.tilt.t = .17 * s; A.asym.t = .24; A.gx.t = .35 * s; A.gy.t = -.3; A.core.t = 1.06; } },
+  };
+
+  let emote = null;
+  function applyBaseline() {
+    const s = sleepLevel();
+    A.lidTop.t = .45 * s; A.slant.t = -.1 * s; A.lidBot.t = 0; A.asym.t = 0;
+    A.tilt.t = 0; A.scale.t = 1; A.lift.t = 0; A.core.t = 1 - .1 * s;
+    if (!isAsleep()) { A.closed.k = 4; A.closed.t = 0; A.bright.t = 1; }
+  }
+  function startEmote(name, t, manual) {
+    if (emote) endEmote();
+    const def = EMOTES[name];
+    emote = { name, def, t0: t, dur: def.dur / Math.sqrt(speed), until: t + def.dur / Math.sqrt(speed), manual };
+    if (isAsleep()) { A.closed.k = 6; A.closed.t = 0; A.bright.t = 1; }  // 眠っていても起こす
+    def.start(t);
+    setNow(def.label);
+    markChip(manual ? name : null);
+  }
+  function endEmote() {
+    if (!emote) return;
+    emote.def.end && emote.def.end();
+    emote = null;
+    markChip(null);
+    applyBaseline();
+    if (isAsleep() && !talk) goToSleep(performance.now() / 1000, true);
+  }
+
+  // ---------- 眠り ----------
+  let peek = null, nextPeek = 0;
+  function goToSleep(t, gentle) {
+    A.closed.k = gentle ? 1.6 : 1.2; A.closed.t = 1;
+    A.gy.t = .35; A.gx.t = 0; A.lidTop.t = .3;
+    peek = null; nextPeek = t + rand(8, 14) / speed; nextZ = t + rand(1.8, 2.6);
+  }
+
+  // ---------- 英語で話す ----------
+  // 声はブラウザの読み上げ（speechSynthesis）を使う。声の大きさは取り出せないので、英文を音節に分けて
+  // 「声の波」を作り、読み上げから届く単語の区切りに合わせて進める。区切りが届かない声や、
+  // 音を出さないときは、見積もった長さで進める
+  const TALK_LINES = [
+    { text: "Hello there! I'm keeping an eye on this desk.", mood: 'happy' },
+    { text: "They'll be back soon. Please wait a moment.", mood: null },
+    { text: "Hmm... I wonder what's for lunch today?", mood: 'curious' },
+    { text: "Please don't touch the computer, okay?", mood: 'focus' },
+    { text: "I'm getting a little sleepy...", mood: 'sleepy' },
+    { text: "Nice to meet you! Have a wonderful day.", mood: 'happy' },
+    { text: "Shh... I'm guarding this screen.", mood: 'focus' },
+    { text: "Did you know? I only blink when nobody is looking.", mood: 'curious' },
+  ];
+  // 話している間の顔つき（文の調子に合わせる）
+  const TALK_POSE = {
+    happy() { A.lidBot.t = .32; A.core.t = 1.08; },
+    curious() { const s = Math.random() < .5 ? -1 : 1; A.tilt.t = .12 * s; A.asym.t = .16; A.core.t = 1.05; },
+    focus() { A.lidTop.t = .22; A.slant.t = .3; A.core.t = .85; },
+    sleepy() { A.lidTop.t = .42; A.slant.t = -.12; A.core.t = .9; },
+  };
+  const synth = window.speechSynthesis || null;
+  const now = () => performance.now() / 1000;
+  // 入・切の初期値。常駐ツールの中では、研究室で急に声が出ないよう「音を出す」を切にしておく
+  const OPT_DEF = { sound: APP ? '0' : '1', caption: '1', auto: '0' };
+  const talkCfg = {
+    sound: store.get('eyes8.sound', OPT_DEF.sound) === '1',        // 音を出す
+    caption: store.get('eyes8.caption', OPT_DEF.caption) === '1',  // 字幕
+    auto: store.get('eyes8.auto', OPT_DEF.auto) === '1',           // ときどき自分から話す
+    mouth: store.get('eyes9.mouth', 'smile'),          // none か、MOUTH_SHAPES のどれか
+    pitch: num('eyes8.pitch', 1.3, .5, 2),
+    rate: num('eyes8.rate', 1, .6, 1.4),
+  };
+  let talk = null, talkLv = 0, talkVis = 0, lineIdx = 0, voices = [], captionTimer = 0;
+  const captionEl = $('#caption');
+  const nextLine = () => TALK_LINES[lineIdx++ % TALK_LINES.length];
+  const talkHint = s => { $('#talkHint').textContent = s; };
+
+  // 英単語の音節の数（母音のかたまりを数える、簡単な見積もり）
+  function syllables(w) {
+    const s = w.toLowerCase().replace(/[^a-z]/g, '');
+    if (!s) return 1;
+    return Math.max(1, (s.replace(/e$/, '').match(/[aeiouy]+/g) || []).length);
+  }
+  // 単語ごとの長さ（秒）と、そのあとの間（読点・句点のあとは長め）を見積もる
+  function planTalk(text, rate) {
+    const words = [], re = /\S+/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const syl = syllables(m[0]);
+      const pause = /[.!?…]["')]*$/.test(m[0]) ? .42 : /[,;:]["')]*$/.test(m[0]) ? .24 : .05;
+      words.push({ text: m[0], ch: m.index, syl, d: (syl * .2 + .05) / rate, gap: pause / rate,
+                   amp: Array.from({ length: syl }, (_, i) => rand(.62, 1) * (i ? .9 : 1)) });
+    }
+    return words;
+  }
+  function pickVoice() {
+    const name = $('#voice').value;
+    return voices.find(v => v.name === name) || null;
+  }
+
+  function startTalk(line, t) {
+    stopTalk(true);
+    const words = planTalk(line.text, talkCfg.rate);
+    if (!words.length) return;
+    if (emote) { emote.def.end && emote.def.end(); emote = null; markChip(null); }
+    applyBaseline();
+    if (isAsleep()) { peek = null; A.closed.k = 6; A.closed.t = 0; A.bright.t = 1; }   // 眠っていても起きて話す
+    const k = talk = { line, words, i: 0, wT: t, started: false, sync: false, silent: !(talkCfg.sound && synth),
+                       nextGlance: 0, spans: null };
+    if (TALK_POSE[line.mood]) TALK_POSE[line.mood]();
+    renderCaption(k);
+    if (k.silent) { beginWords(k, t); return; }
+
+    const u = new SpeechSynthesisUtterance(line.text), v = pickVoice();
+    u.lang = v ? v.lang : 'en-US';
+    if (v) u.voice = v;
+    u.pitch = talkCfg.pitch; u.rate = talkCfg.rate;
+    u.onstart = () => { if (talk === k && !k.started) beginWords(k, now()); };
+    u.onboundary = e => {             // 単語の区切りが届いたら、その語に合わせ直す
+      if (talk !== k || k.silent || (e.name && e.name !== 'word')) return;
+      let j = 0;
+      while (j + 1 < k.words.length && k.words[j + 1].ch <= e.charIndex) j++;
+      if (!k.started) beginWords(k, now());
+      k.sync = true; k.i = j; k.wT = now();
+      renderCaption(k);
+    };
+    u.onend = () => { if (talk === k && !k.silent) finishTalk(now()); };
+    u.onerror = e => {
+      if (talk !== k || e.error === 'interrupted' || e.error === 'canceled') return;
+      k.silent = true; k.sync = false;
+      if (!k.started) beginWords(k, now());
+      talkHint('声を出せなかったので、動きだけ再生しました（' + e.error + '）。' +
+               (e.error === 'not-allowed' ? 'ページのどこかを一度クリックしてから、もう一度どうぞ。' : ''));
+    };
+    k.u = u;
+    k.deadline = t + 2.5;             // 2.5 秒たっても声が始まらなければ、動きだけで進める
+    if (synth.speaking || synth.pending) { synth.cancel(); setTimeout(() => { if (talk === k) synth.speak(u); }, 80); }
+    else synth.speak(u);
+  }
+  function beginWords(k, t) {
+    k.started = true; k.i = 0; k.wT = t;
+    // 終わりの知らせが来なくても、見積もりの 2.5 倍 + 3 秒で切り上げる
+    k.endBy = t + k.words.reduce((s, w) => s + w.d + w.gap, 0) * 2.5 + 3;
+    renderCaption(k);
+  }
+  // いまの「声の大きさ」の目標（0〜1）。単語の中で、音節ごとに山を作る
+  function talkTarget(t) {
+    const k = talk;
+    if (!k) return 0;
+    if (!k.started) {
+      if (t < k.deadline) return 0;
+      k.silent = true; synth && synth.cancel(); beginWords(k, t);
+      talkHint('声が始まらなかったので、動きだけ再生しています。');
+    }
+    if (t > k.endBy) { finishTalk(t); return 0; }
+    let w = k.words[k.i];
+    while (w && !k.sync && t - k.wT >= w.d + w.gap) {   // 区切りが届かないときは、見積もりで次の語へ
+      k.wT += w.d + w.gap; w = k.words[++k.i];
+      renderCaption(k);
+    }
+    if (!w) {
+      if (k.silent) { finishTalk(t); return 0; }
+      // 見積もりより声が長い：終わりの知らせが来るまで、同じ調子で動かす
+      return synth.speaking ? .2 + .6 * Math.pow(Math.sin(Math.PI * ((t * 4.6) % 1)), .7) : 0;
+    }
+    const p = (t - k.wT) / w.d;
+    if (p < 0 || p >= 1) return 0;
+    const q = p * w.syl, j = Math.floor(q);
+    return (.2 + .8 * Math.pow(Math.sin(Math.PI * (q - j)), .7)) * w.amp[Math.min(j, w.syl - 1)];
+  }
+  function finishTalk(t) {
+    const k = talk;
+    if (!k) return;
+    talk = null;
+    if (k.spans) { k.i = k.words.length; renderCaption(k); }
+    captionTimer = setTimeout(() => captionEl.classList.remove('show'), 1600);
+    afterTalk(t, k.line.mood === 'happy' && Math.random() < .6);
+  }
+  function stopTalk(quiet) {
+    const k = talk;
+    if (!k) return;
+    talk = null;
+    if (synth && (synth.speaking || synth.pending)) synth.cancel();
+    clearTimeout(captionTimer);
+    captionEl.classList.remove('show');
+    if (!quiet) afterTalk(now(), false);
+  }
+  function afterTalk(t, smile) {
+    applyBaseline();
+    setNow('こちらを見ている');
+    if (isAsleep()) goToSleep(t, true);
+    else if (smile) startEmote('happy', t, false);   // 楽しい話のあとは、にっこり
+    nextAct = t + rand(.8, 1.6);
+  }
+  // 字幕：話し終えた語・いま話している語・これからの語で明るさを変える
+  function renderCaption(k) {
+    if (!talkCfg.caption) { captionEl.classList.remove('show'); return; }
+    if (!k.spans) {
+      captionEl.textContent = '';
+      k.spans = k.words.map((w, i) => {
+        const s = document.createElement('span');
+        s.textContent = w.text;
+        captionEl.append(s, i < k.words.length - 1 ? ' ' : '');
+        return s;
+      });
+    }
+    k.spans.forEach((s, i) => { s.className = i < k.i ? 'said' : i === k.i && k.started ? 'now' : ''; });
+    clearTimeout(captionTimer);
+    captionEl.classList.add('show');
+  }
+
+  // ---------- ふるまい（自動） ----------
+  let nextAct = 0, nextMicro = 0, follow = null, followUntil = 0, nextZ = 0;
+  let face = { x: 0, y: 0 };   // 顔の中心（画面中央から、画面の高さを 1 とした位置）
+  function think(t) {
+    if (follow && t < followUntil) {
+      A.gx.t = follow.x; A.gy.t = follow.y;
+      setNow('カーソルを見ている');
+      return;
+    }
+    if (follow) { follow = null; if (isAsleep() && !talk) goToSleep(t, true); nextAct = t + rand(.6, 1.4); }
+
+    if (emote) {
+      if (t >= emote.until) endEmote();
+      else { emote.def.tick && emote.def.tick(t, emote); return; }
+    }
+
+    // 話している間は、こちらを見ながら視線を小さく動かす
+    if (talk) {
+      if (t > talk.nextGlance) { A.gx.t = rand(-.14, .14); A.gy.t = rand(-.1, .03); talk.nextGlance = t + rand(.7, 1.6); }
+      setNow('英語で話している');
+      return;
+    }
+
+    if (isAsleep()) {
+      if (!peek && t > nextPeek) {
+        peek = { t0: t };
+        A.closed.k = 2.5; A.closed.t = .45; A.bright.t = 1;
+        A.gx.t = rand(-.5, .5); A.gy.t = .1;
+      }
+      if (peek) {
+        setNow('薄目を開けた');
+        if (t - peek.t0 > 2.8) goToSleep(t, true);
+      } else {
+        setNow('眠っている');
+        A.bright.t = .5 + .2 * Math.sin(t * 1.2);     // 寝息のように明るさがゆっくり揺れる
+        if (t > nextZ && A.closed.v > .8) { snore(t, curStyle(), face); nextZ = t + rand(1.5, 2.3); }
+      }
+      return;
+    }
+
+    // 小さな視線の揺れ（止まって見えないように）
+    if (t > nextMicro) {
+      A.gx.t = clamp(A.gx.t + rand(-.035, .035), -1, 1);
+      A.gy.t = clamp(A.gy.t + rand(-.03, .03), -.9, .9);
+      nextMicro = t + rand(.3, .9);
+    }
+    if (t < nextAct) return;
+
+    const s = sleepLevel();
+    const rate = speed * (1 - .6 * s);
+    const r = Math.random();
+    if (r < .5) {
+      const far = Math.random() < .35;
+      A.gx.t = clamp(tri() * (far ? 1.1 : .55), -1, 1);
+      A.gy.t = clamp(tri() * (far ? .7 : .35) - .05 + .3 * s, -.8, .8);
+      setNow(s > .5 ? 'ぼんやり見回している' : '見回している');
+      nextAct = t + rand(.7, 2.6) / rate;
+    } else if (r < .7) {
+      A.gx.t = rand(-.1, .1); A.gy.t = rand(-.08, .06);
+      setNow('こちらを見ている');
+      nextAct = t + rand(1.4, 3.4) / rate;
+    } else if (s < .6 && talkCfg.auto && Math.random() < .3) {
+      startTalk(nextLine(), t);     // ときどき自分から話す
+    } else if (s < .6) {
+      const pool = ['happy', 'happy', 'curious', 'curious', 'look', 'look', 'focus', 'surprise'];
+      if (s >= .3) pool.push('yawn', 'yawn');
+      startEmote(pool[Math.floor(Math.random() * pool.length)], t, false);
+    } else {
+      startEmote(Math.random() < .35 ? 'yawn' : 'sleepy', t, false);
+    }
+  }
+
+  // ---------- 画面サイズ ----------
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    // 描く細かさは横 2560 まで（それ以上は引き伸ばしても光の見た目は変わらない）
+    const dpr = Math.min(window.devicePixelRatio || 1, 2, 2560 / Math.max(1, r.width));
+    const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    captionEl.style.fontSize = Math.max(13, r.height * .046) + 'px';   // 字幕は画面の高さに合わせる
+  }
+  new ResizeObserver(resize).observe(stage);
+  resize();
+
+  // ---------- 電球のゆらぎ（ごくまれに、ふっと暗くなる） ----------
+  const flick = { t0: -1, next: performance.now() / 1000 + rand(10, 20) };
+  function flicker(t) {
+    if (reduceMotion) return 1;
+    if (flick.t0 < 0) { if (t < flick.next) return 1; flick.t0 = t; }
+    const p = t - flick.t0;
+    if (p > .4) { flick.t0 = -1; flick.next = t + rand(15, 45); return 1; }
+    return 1 - .14 * Math.exp(-Math.pow((p - .06) / .03, 2)) - .07 * Math.exp(-Math.pow((p - .2) / .035, 2));
+  }
+
+  // ---------- 毎フレーム ----------
+  let last = performance.now() / 1000;
+  let pgx = 0, pgy = 0, vgx = 0, vgy = 0;   // 視線の動く速さ（目の伸び縮みに使う）
+  // 留守モードの外付けモニターでは 1 秒に 30 回まで描く（ノートパソコンの発熱を抑える。動きは時刻で決まるので速さは変わらない）
+  const MIN_FRAME = APP === 'monitor' || APP === 'ipad' ? 1 / 45 : 0;
+  function frame() {
+    const t = performance.now() / 1000;
+    if (t - last < MIN_FRAME) { requestAnimationFrame(frame); return; }
+    const dt = Math.min(.05, t - last);
+    last = t;
+
+    think(t);
+    A.cgx.t = A.gx.t; A.cgy.t = A.gy.t;
+    for (const k in A) { const a = A[k]; a.v += (a.t - a.v) * (1 - Math.exp(-a.k * dt)); }
+    if (dt > 1e-4) {
+      const sm = 1 - Math.exp(-25 * dt);
+      vgx += ((A.gx.v - pgx) / dt - vgx) * sm;
+      vgy += ((A.gy.v - pgy) / dt - vgy) * sm;
+    }
+    pgx = A.gx.v; pgy = A.gy.v;
+
+    const canBlink = !isAsleep() || talk || (peek && t - peek.t0 > .6);
+    if (blink.start < 0 && canBlink && t > nextBlink && (!emote || (emote.name !== 'surprise' && emote.name !== 'yawn'))) startBlink(t, false);
+
+    const W = cv.width, H = cv.height;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    // 首の代わりに、目の組ごとゆっくり漂わせる（呼吸のような拡大縮小も少し）
+    const m = reduceMotion ? 0 : 1;
+    const dx = (Math.sin(t * .21) * .6 + Math.sin(t * .13 + 1) * .4) * W * .025 * m;
+    const dy = (Math.sin(t * .17 + 2) * .6 + Math.sin(t * .29) * .4) * H * .02 * m;
+    const breathe = 1 + .01 * Math.sin(t * 1.35) * m;
+    // 話している声の大きさ（0〜1）。音節ごとに目が小さく弾み、縦に伸び、少し明るくなる
+    const tl = talkTarget(t);
+    talkLv += (tl - talkLv) * (1 - Math.exp(-(tl > talkLv ? 38 : 16) * dt));
+    talkVis += ((talk ? 1 : 0) - talkVis) * (1 - Math.exp(-6 * dt));
+    const cx = W / 2 + A.gx.v * W * .07 + dx, cy = H * (.5 - look.rise) + A.gy.v * H * .07 + dy + A.lift.v * H - talkLv * H * .014 * m;
+    face = { x: (cx - W / 2) / H, y: (cy - H / 2) / H };
+    const bv = blinkValue(t), closed = clamp(A.closed.v, 0, 1);
+    const st = curStyle(), bright = clamp(A.bright.v, 0, 1) * flicker(t) * look.bright;
+    const lit = Math.min(1, bright * (1 + .12 * talkLv));
+    const tilt = A.tilt.v + Math.sin(t * .11) * .015 * m, scale = A.scale.v * breathe;
+
+    drawFace(ctx, buf, W, H, st, {
+      cx, cy,
+      gx: A.gx.v, gy: A.gy.v,
+      cgx: A.cgx.v, cgy: A.cgy.v,
+      core: A.core.v * (1 + .04 * Math.sin(t * .7) * m) * (1 + .1 * talkLv),
+      sx: clamp(Math.abs(vgx) * .006, 0, .09) * m,
+      sy: (clamp(Math.abs(vgy) * .006, 0, .09) + talkLv * .045) * m,
+      tilt, scale,
+      // まばたきの「ため」（負の値）は、閉じかけているときほど弱める
+      squash: Math.max(A.closed.v, bv) + Math.min(0, bv) * (1 - closed),
+      lidTop: A.lidTop.v, slant: A.slant.v, lidBot: A.lidBot.v, asym: A.asym.v,
+      bright: lit,
+      mouth: { mode: talkCfg.mouth, o: talkLv, vis: talkVis, t },
+    }, look);
+    drawParticles(ctx, W, H, st, t, bright);
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- 操作パネル ----------
+  const stylesEl = $('#styles'), tonesEl = $('#tones'), summaryEl = $('#summary');
+  const swBuf = makeBuffers();
+  const swatches = [], mouthSwatches = [];   // 目の形の見本・口の形の見本
+  for (const key of Object.keys(STYLES)) {
+    const st = STYLES[key];
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'style-btn'; b.id = 'style-' + key; b.dataset.key = key;
+    b.setAttribute('aria-pressed', String(key === styleKey));
+    const c = document.createElement('canvas'); c.width = 320; c.height = 180;
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = st.name;
+    const d = document.createElement('span'); d.className = 'd'; d.textContent = st.desc;
+    b.append(c, n, d);
+    stylesEl.append(b);
+    swatches.push([c, key]);
+    b.addEventListener('click', () => selectStyle(key));
+  }
+  function selectStyle(key) {
+    styleKey = key; store.set('eyes5.shape', key); showLook();
+    if (compare) compareEl.click();   // 形を選んだら比較表示は解く
+    stylesEl.querySelectorAll('.style-btn').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.key === key)));
+    drawSwatches();   // 口の見本は、選んだ目の形で描き直す
+  }
+
+  function drawSwatches() {
+    for (const [c, key] of swatches) {
+      const cc = c.getContext('2d');
+      cc.setTransform(1, 0, 0, 1, 0, 0);
+      cc.fillStyle = '#000'; cc.fillRect(0, 0, c.width, c.height);
+      drawFace(cc, swBuf, c.width, c.height, makeStyle(STYLES[key]), { cx: 160, cy: 90, gx: .3, gy: -.15, cgx: .3, cgy: -.15, core: 1, sx: 0, sy: 0,
+        tilt: 0, scale: 1, squash: 0, lidTop: 0, slant: 0, lidBot: 0, asym: 0, bright: look.bright }, look);
+    }
+    // 口の見本：いまの目の形・色・光り方で、少し開いたところ
+    for (const [c, key] of mouthSwatches) {
+      const cc = c.getContext('2d');
+      cc.setTransform(1, 0, 0, 1, 0, 0);
+      cc.fillStyle = '#000'; cc.fillRect(0, 0, c.width, c.height);
+      drawFace(cc, swBuf, c.width, c.height, makeStyle(STYLES[styleKey]), { cx: 160, cy: 74, gx: 0, gy: 0, cgx: 0, cgy: 0, core: 1, sx: 0, sy: 0,
+        tilt: 0, scale: .92, squash: 0, lidTop: 0, slant: 0, lidBot: 0, asym: 0, bright: look.bright,
+        mouth: { mode: key, o: .5, vis: 1, t: 1.3 } }, look);
+    }
+  }
+
+  // 色の見本。押すと「色合い」と「あざやかさ」をその値にする
+  for (const p of TONES) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.dataset.name = p.name;
+    const pal = palette(p.hue, p.sat), dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = `radial-gradient(circle at 40% 38%, rgb(${pal.core}), ${pal.stops[2]} 55%, ${pal.stops[4]})`;
+    dot.style.boxShadow = `0 0 7px rgba(${pal.glow},.85)`;
+    b.append(dot, p.name);
+    b.addEventListener('click', () => setLook({ hue: p.hue, sat: p.sat }));
+    tonesEl.append(b);
+  }
+  const toneName = () => (TONES.find(p => p.hue === Math.round(look.hue) && Math.abs(p.sat - look.sat) < .001) || {}).name;
+
+  // つまみ（形・色・光り方）と、一行の要約
+  function showLook() {
+    for (const d of LOOK_DEF) $('#' + d.key + 'Out').textContent = d.text(look[d.key]);
+    const tn = toneName();
+    const parts = ['形：' + STYLES[styleKey].name];
+    if (tn) parts.push('色：' + tn);
+    for (const d of LOOK_DEF) if (!tn || (d.key !== 'hue' && d.key !== 'sat')) parts.push(d.label + ' ' + d.text(look[d.key]));
+    summaryEl.textContent = parts.join(' ／ ');
+    tonesEl.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x.dataset.name === tn));
+    // 色合い・あざやかさのつまみの溝に、選べる色を並べる
+    const base = hexRgb(AMBER.stops[1]);
+    $('#hue').style.background = 'linear-gradient(to right,' +
+      [-180, -135, -90, -45, 0, 45, 90, 135, 180].map(h => `rgb(${retone(base, h, Math.max(look.sat, .35))})`).join(',') + ')';
+    $('#sat').style.background = `linear-gradient(to right, rgb(${retone(base, look.hue, 0)}), rgb(${retone(base, look.hue, 1)}))`;
+    // 字幕の「いま話している語」も目の色で光らせる
+    const pal = palette(look.hue, look.sat);
+    stage.style.setProperty('--cap', `rgb(${pal.rim})`);
+    stage.style.setProperty('--cap-glow', `rgba(${pal.glow},.75)`);
+  }
+  function syncSliders() {
+    for (const d of LOOK_DEF) $('#' + d.key).value = String(Math.round(look[d.key] * d.scale * 100) / 100);
+  }
+  function setLook(vals) {
+    for (const d of LOOK_DEF) if (d.key in vals) { look[d.key] = vals[d.key]; store.set(d.store, String(vals[d.key])); }
+    syncSliders(); showLook(); drawSwatches();
+  }
+  for (const d of LOOK_DEF) {
+    const el = $('#' + d.key);
+    el.addEventListener('input', () => setLook({ [d.key]: +el.value / d.scale }));
+  }
+  syncSliders(); showLook(); drawSwatches();
+
+  // 設定をコピー（チャットに貼って伝える用）と、初期値に戻す（押し間違えないよう 2 回押しで）
+  function flash(btn, text, ms) {
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+    btn.textContent = text;
+    clearTimeout(btn.flashTimer);
+    btn.flashTimer = setTimeout(() => { btn.textContent = btn.dataset.label; btn.classList.remove('on'); }, ms);
+  }
+  const copyBtn = $('#copy'), resetBtn = $('#reset');
+  copyBtn.addEventListener('click', async () => {
+    const code = { shape: styleKey };
+    for (const d of LOOK_DEF) code[d.key] = Math.round(look[d.key] * 1000) / 1000;
+    const text = summaryEl.textContent + '\n' + JSON.stringify(code);
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; }
+    catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+      stage.append(ta); ta.focus(); ta.select();
+      try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+      ta.remove();
+    }
+    flash(copyBtn, ok ? 'コピーしました' : 'コピーできませんでした', 2200);
+  });
+  resetBtn.addEventListener('click', () => {
+    if (!resetBtn.classList.contains('on')) { resetBtn.classList.add('on'); flash(resetBtn, 'もう一度押すと戻します', 3000); return; }
+    resetBtn.classList.remove('on');
+    const vals = {};
+    for (const d of LOOK_DEF) vals[d.key] = d.def;
+    selectStyle('egg'); setLook(vals);
+    flash(resetBtn, '戻しました', 1500);
+  });
+
+  const compareEl = $('#compare');
+  compareEl.addEventListener('click', () => {
+    compare = !compare;
+    compareEl.classList.toggle('on', compare);
+    compareEl.setAttribute('aria-pressed', String(compare));
+    compareEl.textContent = compare ? '試作 4 の形を表示中（押すと戻る）' : '試作 4 の形と比べる';
+  });
+
+  const moodsEl = $('#moods');
+  for (const [key, def] of Object.entries(EMOTES)) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.id = 'mood-' + key; b.dataset.key = key; b.textContent = def.label;
+    b.addEventListener('click', () => startEmote(key, performance.now() / 1000, true));
+    moodsEl.append(b);
+  }
+  function markChip(key) {
+    moodsEl.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x.dataset.key === key));
+  }
+
+  const away = $('#away'), awayOut = $('#awayOut'), awayHint = $('#awayHint');
+  function awayText(mn) {
+    if (mn < 5) return '席を外した直後。元気に見回します。';
+    if (mn < 30) return 'だんだんまぶたが下がってきます。';
+    if (mn < 50) return 'かなり眠そう。まばたきもゆっくりです。';
+    return '眠っています。ときどき薄目を開けて見回します。';
+  }
+  // gentle … 時間がたって自然に変わるとき。表情や話の途中なら、終わってから新しい眠さにする
+  function setMinutes(mn, gentle) {
+    if (mn === minutes) return;
+    const was = isAsleep();
+    minutes = mn;
+    away.value = String(Math.min(60, mn));
+    awayOut.textContent = minutes + ' 分';
+    awayHint.textContent = awayText(minutes);
+    if (gentle && (emote || talk || follow)) return;   // endEmote・afterTalk が新しい眠さで整える
+    if (emote) endEmote(); else applyBaseline();
+    const t = performance.now() / 1000;
+    if (isAsleep() && !was && !talk) goToSleep(t, !!gentle);
+    if (!isAsleep() && was) { peek = null; A.closed.t = 0; A.closed.k = 3; A.bright.t = 1; nextAct = t + .8; }
+  }
+  away.addEventListener('input', () => setMinutes(+away.value, false));
+
+  const speedEl = $('#speed'), speedOut = $('#speedOut');
+  function showSpeed() {
+    const word = speed < .85 ? 'ゆっくり' : speed > 1.2 ? 'きびきび' : 'ふつう';
+    speedOut.textContent = word + ' ×' + speed.toFixed(1);
+  }
+  speedEl.value = String(speed); showSpeed();
+  speedEl.addEventListener('input', () => { speed = +speedEl.value; store.set('eyes.speed', String(speed)); showSpeed(); });
+
+  // ---------- 英語で話す（操作） ----------
+  const talkText = $('#talkText');
+  function sayNow() {
+    const s = talkText.value.trim();
+    startTalk(s ? { text: s, mood: /\?["')]*$/.test(s) ? 'curious' : /!["')]*$/.test(s) ? 'happy' : null } : nextLine(), now());
+  }
+  $('#talkBtn').addEventListener('click', sayNow);
+  $('#talkStop').addEventListener('click', () => stopTalk(false));
+  talkText.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sayNow(); } });
+
+  // 口の形（4案と「口なし」）。見本は、いま選んでいる目の形・色・光り方で描く
+  if (talkCfg.mouth !== 'none' && !MOUTH_SHAPES[talkCfg.mouth]) talkCfg.mouth = 'smile';
+  const mouthsEl = $('#mouths'), mouthNone = $('#mouthNone');
+  for (const [key, ms] of Object.entries(MOUTH_SHAPES)) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'style-btn'; b.dataset.key = key;
+    const c = document.createElement('canvas'); c.width = 320; c.height = 180;
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = ms.name;
+    const d = document.createElement('span'); d.className = 'd'; d.textContent = ms.desc;
+    b.append(c, n, d);
+    mouthsEl.append(b);
+    mouthSwatches.push([c, key]);
+    b.addEventListener('click', () => setMouth(key));
+  }
+  mouthNone.addEventListener('click', () => setMouth('none'));
+  function setMouth(key) {
+    talkCfg.mouth = key; store.set('eyes9.mouth', key);
+    mouthsEl.querySelectorAll('.style-btn').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.key === key)));
+    mouthNone.classList.toggle('on', key === 'none'); mouthNone.setAttribute('aria-pressed', String(key === 'none'));
+  }
+  setMouth(talkCfg.mouth);
+  drawSwatches();
+
+  // 音を出す・字幕・ときどき自分から話す（押すたびに入・切）
+  const OPTS = [['sound', '音を出す'], ['caption', '字幕'], ['auto', 'ときどき自分から話す']];
+  const optShow = {};
+  function setOpt(key, on) {
+    if (talkCfg[key] === on) return;
+    talkCfg[key] = on;
+    store.set('eyes8.' + key, on ? '1' : '0');
+    optShow[key]();
+    if (key === 'caption') { if (talk) renderCaption(talk); else captionEl.classList.remove('show'); }
+    if (key === 'sound' && !on && talk && !talk.silent) {   // 話している途中で音を消したら、声だけ止めて動きは続ける
+      talk.silent = true; talk.sync = false;
+      if (!talk.started) beginWords(talk, now());
+      synth.cancel();
+    }
+  }
+  for (const [key, label] of OPTS) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip';
+    optShow[key] = () => {
+      b.textContent = (talkCfg[key] ? '✓ ' : '') + label;
+      b.classList.toggle('on', talkCfg[key]); b.setAttribute('aria-pressed', String(talkCfg[key]));
+    };
+    b.addEventListener('click', () => setOpt(key, !talkCfg[key]));
+    optShow[key]();
+    $('#talkOpts').append(b);
+  }
+
+  // 声の一覧（英語の声だけ。パソコンに入っている声を先に、ネット経由の声はそう書く）
+  const voiceEl = $('#voice');
+  function loadVoices() {
+    voices = synth ? synth.getVoices().filter(v => /^en([-_]|$)/i.test(v.lang)) : [];
+    voices.sort((a, b) => (b.localService - a.localService) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
+    voiceEl.textContent = '';
+    for (const v of voices) {
+      const o = document.createElement('option');
+      o.value = v.name;
+      o.textContent = v.name + (v.localService ? '' : '（ネット経由）');
+      voiceEl.append(o);
+    }
+    const saved = store.get('eyes8.voice', '');
+    const pick = voices.find(v => v.name === saved) ||
+      voices.find(v => v.localService && /zira/i.test(v.name)) ||
+      voices.find(v => v.localService && /en-US/i.test(v.lang)) ||
+      voices.find(v => v.localService) || voices[0];
+    if (pick) voiceEl.value = pick.name;
+    voiceEl.disabled = !voices.length;
+    if (!voices.length) {
+      const o = document.createElement('option');
+      o.textContent = synth ? '（英語の声が見つかりません）' : '（このブラウザは読み上げに対応していません）';
+      voiceEl.append(o);
+    }
+  }
+  loadVoices();
+  if (synth) synth.onvoiceschanged = loadVoices;
+  voiceEl.addEventListener('change', () => store.set('eyes8.voice', voiceEl.value));
+
+  const talkSliders = {};
+  for (const [key, text] of [['pitch', v => v.toFixed(2)], ['rate', v => '×' + v.toFixed(2)]]) {
+    const el = $('#' + key), out = $('#' + key + 'Out');
+    talkSliders[key] = () => { el.value = String(talkCfg[key]); out.textContent = text(talkCfg[key]); };
+    talkSliders[key]();
+    el.addEventListener('input', () => { talkCfg[key] = +el.value; store.set('eyes8.' + key, el.value); out.textContent = text(talkCfg[key]); });
+  }
+  window.addEventListener('pagehide', () => { if (synth) synth.cancel(); });
+
+  // タップ・マウスの位置を見る（リモートでマウスを動かしたときの動き）
+  function lookAt(e, notice) {
+    const r = stage.getBoundingClientRect();
+    lookAtUV((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height, notice);
+  }
+  // u, v … 画面の左上を 0、右下を 1 とした位置
+  function lookAtUV(u, v, notice) {
+    follow = { x: clamp((u - .5) * 2.2, -1, 1), y: clamp((v - .5) * 2, -.9, .9) };
+    const t = performance.now() / 1000;
+    followUntil = t + 2.2;
+    if (emote) { emote.def.end && emote.def.end(); emote = null; markChip(null); applyBaseline(); }
+    if (isAsleep()) { peek = null; A.closed.k = 6; A.closed.t = 0; A.bright.t = 1; }
+    if (notice) {
+      A.scale.t = 1.07; A.core.t = 1.15; startBlink(t, false);
+      setTimeout(() => { if (!emote) { A.scale.t = 1; A.core.t = 1 - .1 * sleepLevel(); } }, 350);
+    }
+  }
+  stage.addEventListener('pointerdown', e => {
+    lookAt(e, true); wake();
+    if (APP === 'ipad') stage.classList.toggle('panel-off');
+  });
+  stage.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') lookAt(e, false); });
+
+  // スマホで眺めている間に画面が消えないように（できなければそのまま）
+  let lock = null;
+  function wake() {
+    if (lock || !navigator.wakeLock) return;
+    navigator.wakeLock.request('screen').then(l => { lock = l; l.addEventListener('release', () => { lock = null; }); }).catch(() => {});
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && lock === null) { /* 次のタップで取り直す */ } });
+
+  // ---------- 全画面 ----------
+  // ブラウザの全画面を使う。claude.ai の枠の中などで許されないときは、ページいっぱいに広げる
+  const fsHint = $('#fsHint');
+  let cssFull = false, hintTimer = 0, idleTimer = 0;
+  const isFull = () => document.fullscreenElement === stage || cssFull;
+  function showHint(text) {
+    if (text) fsHint.textContent = text;
+    fsHint.classList.add('show');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => fsHint.classList.remove('show'), text ? 3500 : 1800);
+  }
+  // 全画面の間は、形・光り方のつまみと表情のボタンをパネルへ移す（同じ部品を移すので値は常にそろう）
+  const fsPanel = $('#fsPanel');
+  const docked = [$('#lookGroup'), $('#moodGroup'), $('#talkGroup')].map(el => ({ el, parent: el.parentNode, next: el.nextSibling }));
+  function dockPanel(on) {
+    if (on === stage.classList.contains('with-panel')) return;
+    if (on) docked.forEach(d => fsPanel.append(d.el));
+    else docked.forEach(d => d.parent.insertBefore(d.el, d.next));
+    stage.classList.toggle('with-panel', on);
+    stage.classList.remove('panel-off');   // 全画面に入るたびにパネルは出た状態から
+  }
+  // パネルの上の操作は目に伝えない（カーソルを追う・ダブルクリックで全画面を抜ける、を防ぐ）
+  for (const type of ['pointerdown', 'pointermove', 'dblclick']) {
+    fsPanel.addEventListener(type, e => { e.stopPropagation(); if (type !== 'dblclick') poke(); });
+  }
+  function enterCssFull() {
+    cssFull = true;
+    document.body.classList.add('cssfull');
+    dockPanel(true);
+    showHint('枠の中では全画面にできないため、ページいっぱいに広げました（F11 でブラウザごと全画面に）・ Esc で戻る ・ H でパネルを出し入れ');
+    poke();
+  }
+  function enterFull() {
+    wake();
+    if (document.fullscreenEnabled && stage.requestFullscreen) stage.requestFullscreen().catch(enterCssFull);
+    else enterCssFull();
+  }
+  function exitFull() {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    if (cssFull) { cssFull = false; document.body.classList.remove('cssfull'); }
+    if (!document.fullscreenElement) dockPanel(false);
+    stage.classList.remove('idle');
+    fsHint.classList.remove('show');
+  }
+  const toggleFull = () => (isFull() ? exitFull() : enterFull());
+  // 全画面の間、マウスを 2.5 秒動かさなければカーソルとパネルを隠す（パネルの上にあるときは隠さない）
+  function poke() {
+    stage.classList.remove('idle');
+    clearTimeout(idleTimer);
+    if (!isFull() || APP === 'ipad') return;
+    idleTimer = setTimeout(function hide() {
+      if (!isFull()) return;
+      const typing = document.activeElement === talkText;   // 英文を打っている間も隠さない
+      if (fsPanel.matches(':hover') || typing) { idleTimer = setTimeout(hide, 800); return; }
+      stage.classList.add('idle');
+    }, 2500);
+  }
+  $('#fs').addEventListener('click', enterFull);
+  if (APP !== 'ipad') stage.addEventListener('dblclick', toggleFull);   // iPad はいつも目だけなので、抜けさせない
+  stage.addEventListener('pointermove', poke);
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    if (e.target.closest && e.target.closest('input[type="text"], textarea, select')) return;   // 文字を打っている間は効かせない
+    if (APP === 'ipad') {   // iPad にキーボードをつないだときは H だけ
+      if (e.key === 'h' || e.key === 'H') stage.classList.toggle('panel-off');
+      return;
+    }
+    if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFull(); }
+    else if ((e.key === 'h' || e.key === 'H') && isFull()) { stage.classList.toggle('panel-off'); poke(); }
+    else if (e.key === 'Escape' && cssFull) exitFull();
+  });
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement === stage) { dockPanel(true); showHint('Esc で戻る ・ H でパネルを出し入れ'); poke(); }
+    else { if (!cssFull) dockPanel(false); stage.classList.remove('idle'); fsHint.classList.remove('show'); }
+  });
+
+  // ---------- iPad からモニターに映すとき ----------
+  // 開いたらすぐ目だけを画面いっぱいに。調整パネルはしまった状態から始め、タップで出す
+  if (APP === 'ipad') {
+    cssFull = true;
+    document.body.classList.add('cssfull');
+    dockPanel(true);
+    stage.classList.add('panel-off');
+    showHint('画面をタップすると調整パネルが出ます（もう一度タップでしまう）');
+    wake();
+    // ほかのアプリから戻ったときに、画面が消えない指定を取り直す
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake(); });
+  }
+  // 公開した場所（https）で開いたときは、一度読み込めばネットが切れても開けるようにする
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+
+  // ---------- 別の画面で変えた値を読み直す ----------
+  // 設定画面と留守モードの幕は同じ保存場所を見ている。片方で値を変えると、もう片方に知らせ（storage）が届く
+  function refreshFromStore() {
+    const k = store.get('eyes5.shape', 'egg');
+    if (STYLES[k] && k !== styleKey) selectStyle(k);
+    const vals = {};
+    for (const d of LOOK_DEF) vals[d.key] = num(d.store, d.def, d.min, d.max);
+    setLook(vals);
+    speed = clamp(parseFloat(store.get('eyes.speed', '1')) || 1, .6, 1.6);
+    speedEl.value = String(speed); showSpeed();
+    for (const [key] of OPTS) setOpt(key, store.get('eyes8.' + key, OPT_DEF[key]) === '1');
+    const mk = store.get('eyes9.mouth', 'smile');
+    if (mk !== talkCfg.mouth) setMouth(mk === 'none' || MOUTH_SHAPES[mk] ? mk : 'smile');
+    talkCfg.pitch = num('eyes8.pitch', 1.3, .5, 2); talkCfg.rate = num('eyes8.rate', 1, .6, 1.4);
+    talkSliders.pitch(); talkSliders.rate();
+    const vn = store.get('eyes8.voice', '');
+    if (vn && voices.some(v => v.name === vn)) voiceEl.value = vn;
+  }
+  window.addEventListener('storage', e => { if (e.storageArea === localStorage) refreshFromStore(); });
+
+  // ---------- 常駐ツールとのやりとり ----------
+  const host = window.chrome && window.chrome.webview;
+  if (APP === 'monitor') {
+    // 留守モードに入った時刻（ツールが ?since= で渡す）から数えて、だんだん眠くなる
+    const since = +new URLSearchParams(location.search).get('since') || Date.now();
+    const tick = () => setMinutes(Math.max(0, Math.floor((Date.now() - since) / 60000)), true);
+    tick();
+    setInterval(tick, 5000);
+  }
+  if (APP === 'settings') {
+    const previewBtn = $('#preview'), monBright = $('#monBright'), monBrightOut = $('#monBrightOut'), appHint = $('#appHint');
+    const app = { away: false, preview: false, canPreview: !!host, monBright: 30, note: host ? '' : 'この画面は、常駐ツール（画面オフキー）から開いたときだけ使えます。' };
+    const showApp = () => {
+      previewBtn.disabled = !host || app.away || !app.canPreview;
+      previewBtn.classList.toggle('on', app.preview);
+      previewBtn.setAttribute('aria-pressed', String(app.preview));
+      previewBtn.textContent = app.preview ? '確かめるのをやめる（モニターを元に戻す）' : '外付けモニターで確かめる';
+      if (document.activeElement !== monBright) monBright.value = String(app.monBright);
+      monBrightOut.textContent = monBright.value;
+      monBright.disabled = !host;
+      appHint.textContent = app.note ||
+        (app.away ? 'いま留守モードで、外付けモニターに目を映しています。ここで変えた値は、映っている目にすぐ反映されます。'
+         : app.preview ? 'いま外付けモニターに、留守モードと同じ明るさで目を映しています。つまみを動かすと、すぐ反映されます。'
+         : '押すと、外付けモニターを留守モードと同じ明るさにして目を映します。もう一度押すか、この画面を閉じると元に戻ります。');
+    };
+    previewBtn.addEventListener('click', () => host && host.postMessage(app.preview ? 'preview:off' : 'preview:on'));
+    let mbTimer = 0;
+    monBright.addEventListener('input', () => {
+      monBrightOut.textContent = monBright.value;
+      clearTimeout(mbTimer);
+      mbTimer = setTimeout(() => host && host.postMessage('monbright:' + monBright.value), 150);   // モニターへの書き込みは遅いので間引く
+    });
+    if (host) host.addEventListener('message', e => { const m = e.data || {}; if (m.type === 'state') { Object.assign(app, m); showApp(); } });
+    showApp();
+    if (host) host.postMessage('ready');
+  }
+  if (host && APP === 'monitor') {
+    // 外付けモニターの上でマウスが動いたら（リモートで動かしたときなど）、そこを見る
+    host.addEventListener('message', e => { const m = e.data || {}; if (m.type === 'cursor') lookAtUV(m.u, m.v, !!m.notice); });
+    // 操作が無いまま時間がたつと、ツールが「眠り」を知らせてくる。ゆっくり暗くし、起きたらすぐ戻す（暗い部屋で目だけが光らないように）
+    host.addEventListener('message', e => {
+      const m = e.data || {};
+      if (m.type !== 'sleep') return;
+      const lv = Math.max(.05, Math.min(1, +m.level || 1));
+      stage.style.transition = lv < 1 ? 'opacity 90s ease-in-out' : 'opacity 1.5s ease-out';
+      stage.style.opacity = String(lv);
+    });
+  }
+
+  nextBlink = performance.now() / 1000 + 1.5;
+  requestAnimationFrame(frame);
+})();
+</script>

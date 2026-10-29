@@ -1729,10 +1729,53 @@
 
   // ---------- 常駐ツールとのやりとり ----------
   const host = window.chrome && window.chrome.webview;
-  if (APP === 'monitor') {
-    // 留守モードに入った時刻（ツールが ?since= で渡す）から数えて、だんだん眠くなる
-    const since = +new URLSearchParams(location.search).get('since') || Date.now();
-    const tick = () => setMinutes(Math.max(0, Math.floor((Date.now() - since) / 60000)), true);
+  // ---------- 夜と休日は眠っている ----------
+  // 平日は 20:00〜翌 7:00、土日は一日中、目を閉じて少し暗くなる。朝になったら目を覚ます。
+  // ツールはモニター表示設定.txt の値を ?night=1200-420（0:00 からの分。同じ値なら夜も眠らない）
+  // &rest=0,6（一日中眠る曜日。0 = 日曜）&dim=50（眠るときの明るさ）で渡す。iPad は渡されなければ既定値
+  const qs = new URLSearchParams(location.search);
+  const night = (() => {
+    const m = /^(\d+)-(\d+)$/.exec(qs.get('night') || '');
+    const rest = qs.has('rest') ? (qs.get('rest') || '').split(',').filter(s => /^[0-6]$/.test(s)).map(Number) : [0, 6];
+    return { from: m ? +m[1] % 1440 : 20 * 60, to: m ? +m[2] % 1440 : 7 * 60, rest,
+             dim: clamp((+qs.get('dim') || 50) / 100, .1, 1) };
+  })();
+  // 試験用: ?at=2026-10-31T10:00 で、その時刻から時計が進んでいるものとして扱う
+  const clockShift = qs.get('at') && !isNaN(Date.parse(qs.get('at'))) ? Date.parse(qs.get('at')) - Date.now() : 0;
+  const nowDate = () => new Date(Date.now() + clockShift);
+  function isNight(d) {
+    if (night.rest.includes(d.getDay())) return true;
+    const m = d.getHours() * 60 + d.getMinutes();
+    if (night.from === night.to) return false;
+    return night.from < night.to ? m >= night.from && m < night.to : m >= night.from || m < night.to;
+  }
+  // 目の明るさ = ツールの「眠り」（操作が無いまま時間がたったとき）と、夜の暗さの、暗いほう
+  let hostLevel = 1, nightNow = false, dimShown = -1;
+  function applyDim(instant) {
+    const lv = Math.max(.05, Math.min(hostLevel, nightNow ? night.dim : 1));
+    if (lv === dimShown) return;
+    stage.style.transition = instant ? 'none' : lv < dimShown ? 'opacity 90s ease-in-out' : 'opacity 1.5s ease-out';
+    stage.style.opacity = String(lv);
+    dimShown = lv;
+  }
+
+  if (APP === 'monitor' || APP === 'ipad') {
+    // モニター … 留守モードに入った時刻（ツールが ?since= で渡す）から数えて、だんだん眠くなる
+    // iPad    … ふだんはパネルの「席を外してからの時間」のまま（だんだん眠くはならない）
+    const since = +qs.get('since') || Date.now();
+    let awakeFrom = since, manual = minutes, first = true;
+    away.addEventListener('input', () => { manual = +away.value; });
+    const tick = () => {
+      const was = nightNow;
+      nightNow = isNight(nowDate());
+      if (was && !nightNow) awakeFrom = Date.now();   // 朝になった。ここから数え直す（夜通し留守でも、朝は元気に）
+      let mn = APP === 'monitor' ? Math.max(0, Math.floor((Date.now() - Math.max(since, awakeFrom)) / 60000)) : manual;
+      if (nightNow) mn = Math.max(mn, 60);
+      setMinutes(mn, !first);
+      if (nightNow) awayHint.textContent = '夜・休日なので眠っています（朝になると起きます）。';
+      applyDim(first);
+      first = false;
+    };
     tick();
     setInterval(tick, 5000);
   }
@@ -1770,9 +1813,8 @@
     host.addEventListener('message', e => {
       const m = e.data || {};
       if (m.type !== 'sleep') return;
-      const lv = Math.max(.05, Math.min(1, +m.level || 1));
-      stage.style.transition = lv < 1 ? 'opacity 90s ease-in-out' : 'opacity 1.5s ease-out';
-      stage.style.opacity = String(lv);
+      hostLevel = Math.max(.05, Math.min(1, +m.level || 1));
+      applyDim(false);
     });
   }
 

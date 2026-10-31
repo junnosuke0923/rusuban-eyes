@@ -203,10 +203,10 @@
   <header>
     <div class="title-row">
       <h1>留守番の目</h1>
-      <span class="tag" data-only="web">試作 11</span>
+      <span class="tag" data-only="web">試作 12</span>
       <span class="tag" data-only="settings">設定</span>
     </div>
-    <p data-only="web">Pause キーで席を外したとき、外付けモニターに映す「目」の試作です。モニター部分をタップすると（パソコンならマウスを動かすと）、そこを見ます。ダブルクリックか F キーで全画面になります。色を変えたり、英語で話させたりできます（試作 9 で口を目と同じ光り方に描き直しました）。</p>
+    <p data-only="web">Pause キーで席を外したとき、外付けモニターに映す「目」の試作です。モニター部分をタップすると（パソコンならマウスを動かすと）、そこを見ます。ダブルクリックか F キーで全画面になります。色を変えたり、英語で話させたりできます（試作 9 で口を、試作 12 で眠っているときの印を、目と同じ光り方に描き直しました）。</p>
     <p data-only="settings">Pause キー（または Win + F12）で留守モードにしたとき、外付けモニターに映す目の設定です。ここで変えた値は自動で保存され、映っている目にもすぐ反映されます。</p>
     <div class="app-bar" data-only="settings">
       <div class="tools">
@@ -371,6 +371,12 @@
         <div class="hint" data-only="settings">ここで動かすのは、この画面の見本だけです。モニターの目は、実際に席を外してからの時間でだんだん眠くなります。</div>
       </div>
 
+      <div class="group" id="zzzGroup">
+        <h2>眠っているときの印</h2>
+        <div class="styles" id="zzzs"></div>
+        <div class="hint">押すと「席を外してからの時間」を 60 分にして、眠っているところを見せます。見本は右目のあたりを大きくしたものです。</div>
+      </div>
+
       <div class="slider">
         <div class="slider-head">
           <label for="speed">動きの速さ</label>
@@ -423,6 +429,15 @@
     oval:  { name: 'まる口', desc: '目と同じ丸み。声に合わせて縦に開く' },
     bar:   { name: 'ひとすじ', desc: '横長の光。声に合わせて厚みが変わる' },
     dots:  { name: '光の粒', desc: '三つの小さな光が、声に合わせて伸び縮みする' },
+  };
+  // 眠っているときの印。「いまの Z」は試作 11 までの印（比べる用）。ほかは目と同じ色・ぼかし・にじみで描き、
+  // 寝息に合わせた目の明るさの揺れにもついていく
+  const SLEEP_MARKS = {
+    z:      { name: '前の Z（比べる用）', desc: '試作 11 までの印。細い線で、目より明るくくっきり' },
+    glowz:  { name: '光の Z', desc: '目と同じ光でできた、丸みのある太い Z。輪郭がふわっと溶ける' },
+    dotz:   { name: '光の粒の Z', desc: '目の色の小さな光が Z の形に灯り、昇りながらほどけて消える' },
+    bubble: { name: '寝息のあぶく', desc: '光の輪が、寝息のたびにふくらみながら昇って消える' },
+    none:   { name: 'Z なし', desc: '印は出さない。閉じた目と、寝息のような明るさの揺れだけ' },
   };
   const OLD_STYLE = { type: 'rrect', w: .25, h: .29, r: .36, gap: .39, ...AMBER };   // 試作 4 の形（比べる用）
   const STOP_POS = [0, .18, .45, .78, 1];
@@ -751,11 +766,18 @@
         vx: rand(-.01, .01), vy: -rand(.02, .04), r: .003 + .004 * Math.random(), seed: rand(0, 6) });
     }
   }
-  function snore(t, st, face) {
-    particles.push({ kind: 'z', t0: t, life: 3.4,
-      x: face.x + st.gap * look.gap / 2 + st.w * .45, y: face.y - st.h * .5,
-      vx: .025, vy: -.055, size: .036, rot: -.18, spin: .1, seed: Math.random() * 6 });
+  // 寝息ひとつぶんの印を出す。出る場所は右目の目尻の上
+  function snore(t, st, face, kind) {
+    const x = face.x + st.gap * look.gap / 2 + st.w * .45, y = face.y - st.h * .5, seed = Math.random() * 6;
+    if (kind === 'z') particles.push({ kind, t0: t, life: 3.4, x, y, vx: .025, vy: -.055, size: .036, rot: -.18, spin: .1, seed });
+    else if (kind === 'glowz') particles.push({ kind, t0: t, life: 3.8, x, y, vx: .02, vy: -.05, size: .05, rot: -.14, seed });
+    else if (kind === 'dotz') particles.push({ kind, t0: t, life: 3.8, x, y, vx: .02, vy: -.05, size: .058, rot: -.14, seed,
+      // 粒ごとの、ほどけていく向き・距離と、またたきのずれ
+      dots: ZDOTS.map(() => ({ ang: rand(0, Math.PI * 2), d: rand(.15, .5), ph: rand(0, 6), r: rand(.85, 1.15) })) });
+    else if (kind === 'bubble') particles.push({ kind, t0: t, life: 3.6, x: x - st.w * .08, y: y + st.h * .08, vx: .016, vy: -.045, size: .06, seed });
   }
+  // 光の粒の Z：Z の線の上に、書き順どおりほぼ等間隔に並べた点（大きさ 1 の Z。中心が 0,0）
+  const ZDOTS = [[-.5, -.5], [-.17, -.5], [.17, -.5], [.5, -.5], [.25, -.25], [0, 0], [-.25, .25], [-.5, .5], [-.17, .5], [.17, .5], [.5, .5]];
   // きらめきの明るさ：すっと点いて、尾を引いて消える。半分ほどは途中でもう一度またたく
   function glintEnv(p, u, age) {
     let e = u < .12 ? Math.pow(u / .12, 1.5) : Math.exp(-(u - .12) * 4.2);
@@ -790,13 +812,14 @@
     streak(c, X, Y, R * (1.6 + 3.6 * a), th, GLINT_ANGLE, a * .9, st);
     streak(c, X, Y, R * (1.1 + 2.4 * a), th, GLINT_ANGLE + Math.PI / 2, a * .65, st);
   }
-  function drawZ(c, W, H, st, p, age, u) {
+  // ox, oy … 画面の中心（位置 0,0 の点）。H … 位置と大きさの 1 にあたる長さ
+  function drawZ(c, ox, oy, H, st, p, age, u) {
     const x = p.x + p.vx * age + Math.sin(age * 2.2 + p.seed) * .012, y = p.y + p.vy * age;
     const r = p.size * (.7 + u * .9) * H, a = clamp(Math.min(1, u * 5) * (1 - u) * 1.2, 0, 1);
     if (r < .5 || a <= 0) return;
     c.save();
     c.globalAlpha = a;
-    c.translate(W / 2 + x * H, H / 2 + y * H);
+    c.translate(ox + x * H, oy + y * H);
     c.rotate(p.rot + p.spin * age);
     c.shadowColor = `rgba(${st.glow},.95)`;
     c.shadowBlur = r * 1.3;
@@ -805,13 +828,131 @@
     c.strokeStyle = `rgb(${st.rim})`; c.stroke();
     c.restore();
   }
+
+  // 眠っているときの印を、目と同じ手順で光らせて描く：
+  //   形を描く → 目と同じ色の並び（中心が明るく、縁へ深い橙）で塗る → 輪郭をぼかす → にじみを細い順に重ねる
+  // X, Y … 置く位置（画面の画素）、s … 形の大きさ（画素）、a … 濃さ（目の明るさを掛けたもの）
+  // paint(l, s) … 作業用の画面の中央を原点に、形を不透明な色で描く。light … 光の中心のずれ（s に対する割合）
+  // fe … 輪郭のぼかしの強さ（目の「ぼかし」に対する倍率。細い線ほど小さくする）
+  const markBuf = makeBuffers();
+  function drawGlowMark(c, X, Y, s, a, st, paint, light, fe) {
+    if (s < 1 || a < .004) return;
+    const feather = s * look.feather * fe;
+    const S = Math.ceil(s * 1.3 + feather * 4) + 2;
+    const l = fit(markBuf.layer, S, S);
+    l.setTransform(1, 0, 0, 1, 0, 0);
+    l.globalCompositeOperation = 'source-over';
+    l.clearRect(0, 0, S, S);
+    l.save(); l.translate(S / 2, S / 2); paint(l, s); l.restore();
+    l.globalCompositeOperation = 'source-atop';
+    const lx = S / 2 + light[0] * s, ly = S / 2 + light[1] * s;
+    const g = l.createRadialGradient(lx, ly, 0, lx, ly, s * .72);
+    STOP_POS.forEach((p, i) => g.addColorStop(p, st.stops[i]));
+    l.fillStyle = g; l.fillRect(0, 0, S, S);
+    const cg = l.createRadialGradient(lx, ly, 0, lx, ly, s * .34);   // 目の「光の芯」にあたる、うすい明るみ
+    cg.addColorStop(0, `rgba(${st.core},.55)`);
+    cg.addColorStop(1, `rgba(${st.coreEdge},0)`);
+    l.fillStyle = cg; l.fillRect(0, 0, S, S);
+    l.globalCompositeOperation = 'source-over';
+
+    let body = markBuf.layer;
+    if (feather > .5) {
+      const OFF = S * 3;
+      const m = fit(markBuf.mask, S, S);
+      m.setTransform(1, 0, 0, 1, 0, 0);
+      m.clearRect(0, 0, S, S);
+      m.shadowOffsetX = OFF; m.shadowColor = '#000'; m.shadowBlur = feather;
+      m.drawImage(body, -OFF, 0);
+      m.shadowColor = 'transparent'; m.shadowOffsetX = 0;
+      const so = fit(markBuf.soft, S, S);
+      so.setTransform(1, 0, 0, 1, 0, 0);
+      so.globalCompositeOperation = 'source-over';
+      so.fillStyle = st.stops[st.stops.length - 1];
+      so.fillRect(0, 0, S, S);
+      so.drawImage(body, 0, 0);
+      so.globalCompositeOperation = 'destination-in';
+      so.drawImage(markBuf.mask, 0, 0);
+      so.globalCompositeOperation = 'source-over';
+      body = markBuf.soft;
+    }
+    // にじみ：目と同じ重ね方。広さは印の大きさに合わせる
+    const OFF = (c.canvas.width + S) * 3;
+    c.save();
+    c.globalAlpha = Math.min(1, a);
+    c.shadowOffsetX = OFF;
+    for (const [blur, alpha] of GLOW_LAYERS) {
+      c.shadowColor = `rgba(${st.glow},${Math.min(1, alpha * st.glowA * look.glow)})`;
+      c.shadowBlur = s * blur * look.spread * 1.3;
+      c.drawImage(body, X - S / 2 - OFF, Y - S / 2);
+    }
+    c.shadowColor = 'transparent'; c.shadowOffsetX = 0;
+    c.drawImage(body, X - S / 2, Y - S / 2);
+    c.restore();
+  }
+  // 光の Z の形。角を丸めた太い線
+  function paintZ(l, s, rot) {
+    const w = s * .42, h = s * .38;
+    l.rotate(rot);
+    l.beginPath(); l.moveTo(-w, -h); l.lineTo(w, -h); l.lineTo(-w, h); l.lineTo(w, h);
+    l.lineWidth = s * .23; l.lineJoin = 'round'; l.lineCap = 'round';
+    l.strokeStyle = '#fff'; l.stroke();
+  }
+  // あぶくの形。光の輪と、内側の左上に弧のつや（点にすると黒目に見えるので、輪に沿わせた短い弧にする）
+  function paintBubble(l, s) {
+    l.beginPath(); l.arc(0, 0, s * .4, 0, Math.PI * 2);
+    l.lineWidth = s * .16; l.strokeStyle = '#fff'; l.stroke();
+    l.beginPath(); l.arc(0, 0, s * .24, Math.PI * 1.08, Math.PI * 1.42);
+    l.lineWidth = s * .08; l.lineCap = 'round'; l.stroke();
+  }
+  // 眠っているときの印（いまの Z 以外）。bright … 目の明るさ（寝息に合わせて揺れる）
+  function drawSleepMark(c, ox, oy, H, st, p, age, u, bright) {
+    const X = ox + (p.x + p.vx * age + Math.sin(age * 1.5 + p.seed) * .01) * H, Y = oy + (p.y + p.vy * age) * H;
+    if (p.kind === 'glowz') {
+      // 小さく現れ、ゆっくり大きくなりながら昇り、溶けるように消える。回さずに、わずかに揺らすだけ
+      const s = p.size * (.6 + .8 * u) * H;
+      const a = Math.pow(clamp(u / .2, 0, 1), 1.5) * Math.pow(1 - u, .9) * 1.25 * bright;
+      const rot = p.rot + Math.sin(age * 1.1 + p.seed) * .05;
+      drawGlowMark(c, X, Y, s, a, st, (l, s) => paintZ(l, s, rot), [0, -.1], 1.2);
+    } else if (p.kind === 'bubble') {
+      // 寝息で少しずつふくらみ、最後はふわっと広がって消える
+      const pop = clamp((u - .8) / .2, 0, 1);
+      const s = p.size * (.35 + .75 * Math.sqrt(u)) * (1 + .3 * pop) * H * (1 + .03 * Math.sin(age * 3 + p.seed));
+      const a = Math.pow(clamp(u / .15, 0, 1), 1.5) * (1 - pop * pop) * 1.3 * bright;
+      drawGlowMark(c, X, Y, s, a, st, paintBubble, [-.22, -.26], 1);
+    } else if (p.kind === 'dotz') {
+      // 書き順どおりに粒が灯り、後半でほどけて散りながら消える
+      const s = p.size * (.7 + .5 * u) * H, cr = Math.cos(p.rot), sr = Math.sin(p.rot);
+      const loose = Math.pow(clamp((u - .45) / .55, 0, 1), 1.4);
+      c.save();
+      c.globalCompositeOperation = 'lighter';   // 光は足し算で重ねる（うれしいときの光の粒と同じ）
+      for (let i = 0; i < ZDOTS.length; i++) {
+        const d = p.dots[i], [zx, zy] = ZDOTS[i];
+        const on = clamp((u - .02 - i * .02) / .07, 0, 1);
+        const a = on * on * Math.pow(1 - u, .8) * (.8 + .2 * Math.sin(age * 4.5 + d.ph)) * 1.8 * bright;
+        if (a < .004) continue;
+        const px = zx * s + Math.cos(d.ang) * d.d * s * loose, py = zy * s * .9 + Math.sin(d.ang) * d.d * s * loose - loose * s * .2;
+        const R = s * .3 * d.r * (1 - .3 * loose), DX = X + px * cr - py * sr, DY = Y + px * sr + py * cr;
+        // 目の光の芯と同じ色の粒。にじみが隣の粒と重なって、ひと筆の光に見える
+        const g = c.createRadialGradient(DX, DY, 0, DX, DY, R);
+        g.addColorStop(0, `rgba(${st.core},${Math.min(1, a)})`);
+        g.addColorStop(.2, `rgba(${st.coreEdge},${Math.min(1, a * .8)})`);
+        g.addColorStop(.5, `rgba(${st.glow},${a * .25})`);
+        g.addColorStop(1, `rgba(${st.glow},0)`);
+        c.fillStyle = g;
+        c.beginPath(); c.arc(DX, DY, R, 0, Math.PI * 2); c.fill();
+      }
+      c.restore();
+    }
+  }
+  const SLEEP_KINDS = ['z', 'glowz', 'dotz', 'bubble'];
   function drawParticles(c, W, H, st, t, bright) {
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i], age = t - p.t0;
       if (age > p.life) { particles.splice(i, 1); continue; }
       if (age < 0) continue;
       const u = age / p.life;
-      if (p.kind === 'z') { drawZ(c, W, H, st, p, age, u); continue; }
+      if (p.kind === 'z') { drawZ(c, W / 2, H / 2, H, st, p, age, u); continue; }
+      if (p.kind !== 'glint' && p.kind !== 'mote') { drawSleepMark(c, W / 2, H / 2, H, st, p, age, u, bright); continue; }
       let x = p.x + p.vx * age, y = p.y + p.vy * age, a, R;
       if (p.kind === 'glint') { a = glintEnv(p, u, age); R = p.r * H * (.75 + .25 * a); }
       else { x += Math.sin(age * 1.7 + p.seed) * .006; a = Math.pow(Math.sin(Math.PI * u), 1.5) * .7; R = p.r * H; }
@@ -861,6 +1002,8 @@
   const look = {};
   for (const d of LOOK_DEF) look[d.key] = num(d.store, d.def, d.min, d.max);
   let compare = false;   // true の間は試作 4 の形（角丸の四角）で描く
+  let sleepMark = store.get('eyes12.mark', 'glowz');   // 眠っているときの印（SLEEP_MARKS のどれか）
+  if (!SLEEP_MARKS[sleepMark]) sleepMark = 'glowz';
 
   // いま描く目 = 形（STYLES）に、色と大きさの調整を重ねたもの。値が変わったときだけ作り直す
   function makeStyle(base) {
@@ -1194,7 +1337,7 @@
       } else {
         setNow('眠っている');
         A.bright.t = .5 + .2 * Math.sin(t * 1.2);     // 寝息のように明るさがゆっくり揺れる
-        if (t > nextZ && A.closed.v > .8) { snore(t, curStyle(), face); nextZ = t + rand(1.5, 2.3); }
+        if (t > nextZ && A.closed.v > .8) { snore(t, curStyle(), face, sleepMark); nextZ = t + rand(1.5, 2.3); }
       }
       return;
     }
@@ -1319,7 +1462,7 @@
   // ---------- 操作パネル ----------
   const stylesEl = $('#styles'), tonesEl = $('#tones'), summaryEl = $('#summary');
   const swBuf = makeBuffers();
-  const swatches = [], mouthSwatches = [];   // 目の形の見本・口の形の見本
+  const swatches = [], mouthSwatches = [], zzzSwatches = [];   // 目の形・口の形・眠っているときの印の見本
   for (const key of Object.keys(STYLES)) {
     const st = STYLES[key];
     const b = document.createElement('button');
@@ -1356,6 +1499,25 @@
       drawFace(cc, swBuf, c.width, c.height, makeStyle(STYLES[styleKey]), { cx: 160, cy: 74, gx: 0, gy: 0, cgx: 0, cgy: 0, core: 1, sx: 0, sy: 0,
         tilt: 0, scale: .92, squash: 0, lidTop: 0, slant: 0, lidBot: 0, asym: 0, bright: look.bright,
         mouth: { mode: key, o: .5, vis: 1, t: 1.3 } }, look);
+    }
+    // 眠っているときの印の見本：目を閉じた顔の右目のあたりを大きくして、寝息ふたつぶんの印を止めて描く
+    for (const [c, key] of zzzSwatches) {
+      const cc = c.getContext('2d'), st = makeStyle(STYLES[styleKey]);
+      const Z = 2.6, HZ = c.height * Z, ox = 40, oy = 150, dim = look.bright * .6;
+      cc.setTransform(1, 0, 0, 1, 0, 0);
+      cc.fillStyle = '#000'; cc.fillRect(0, 0, c.width, c.height);
+      drawFace(cc, swBuf, c.width, c.height, st, { cx: ox, cy: oy, gx: 0, gy: .35, cgx: 0, cgy: .35, core: .9, sx: 0, sy: 0,
+        tilt: 0, scale: Z, squash: 1, lidTop: .3, slant: 0, lidBot: 0, asym: 0, bright: dim }, look);
+      if (key === 'none') continue;
+      const saved = particles.length;
+      snore(0, st, { x: 0, y: 0 }, key);
+      snore(0, st, { x: 0, y: 0 }, key);
+      const [p1, p2] = particles.splice(saved, 2);
+      for (const [p, age] of [[p1, p1.life * .62], [p2, p2.life * .15]]) {
+        p.seed = 1; if (p.dots) p.dots.forEach((d, i) => { d.ang = i * 2.4; d.d = .3; d.ph = i; d.r = 1; });
+        if (key === 'z') drawZ(cc, ox, oy, HZ, st, p, age, age / p.life);
+        else drawSleepMark(cc, ox, oy, HZ, st, p, age, age / p.life, dim);
+      }
     }
   }
 
@@ -1414,7 +1576,7 @@
   }
   const copyBtn = $('#copy'), resetBtn = $('#reset');
   copyBtn.addEventListener('click', async () => {
-    const code = { shape: styleKey };
+    const code = { shape: styleKey, zzz: sleepMark };
     for (const d of LOOK_DEF) code[d.key] = Math.round(look[d.key] * 1000) / 1000;
     const text = summaryEl.textContent + '\n' + JSON.stringify(code);
     let ok = false;
@@ -1518,6 +1680,32 @@
     mouthNone.classList.toggle('on', key === 'none'); mouthNone.setAttribute('aria-pressed', String(key === 'none'));
   }
   setMouth(talkCfg.mouth);
+
+  // 眠っているときの印（4案と、比べる用のいまの Z）
+  const zzzsEl = $('#zzzs');
+  for (const [key, mk] of Object.entries(SLEEP_MARKS)) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'style-btn'; b.dataset.key = key;
+    const c = document.createElement('canvas'); c.width = 320; c.height = 180;
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = mk.name;
+    const d = document.createElement('span'); d.className = 'd'; d.textContent = mk.desc;
+    b.append(c, n, d);
+    zzzsEl.append(b);
+    zzzSwatches.push([c, key]);
+    b.addEventListener('click', () => {
+      setSleepMark(key);
+      // 眠っているところを見せる（起きていたら 60 分にする）。出ている印は消して、すぐ新しい印を出す
+      if (!isAsleep()) { away.value = '60'; away.dispatchEvent(new Event('input')); }
+      if (isAsleep() && !talk && !emote && !follow) goToSleep(now(), true);
+      nextZ = now() + (A.closed.v > .8 ? .3 : 1.2);
+    });
+  }
+  function setSleepMark(key, save = true) {   // 保存は選んだときだけ（初期値を変えたとき、保存済みの値に邪魔されないように）
+    if (key !== sleepMark) for (let i = particles.length - 1; i >= 0; i--) if (SLEEP_KINDS.includes(particles[i].kind)) particles.splice(i, 1);
+    sleepMark = key; if (save) store.set('eyes12.mark', key);
+    zzzsEl.querySelectorAll('.style-btn').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.key === key)));
+  }
+  setSleepMark(sleepMark, false);
   drawSwatches();
 
   // 音を出す・字幕・ときどき自分から話す（押すたびに入・切）
@@ -1720,6 +1908,8 @@
     for (const [key] of OPTS) setOpt(key, store.get('eyes8.' + key, OPT_DEF[key]) === '1');
     const mk = store.get('eyes9.mouth', 'smile');
     if (mk !== talkCfg.mouth) setMouth(mk === 'none' || MOUTH_SHAPES[mk] ? mk : 'smile');
+    const zk = store.get('eyes12.mark', 'glowz');
+    if (zk !== sleepMark) setSleepMark(SLEEP_MARKS[zk] ? zk : 'glowz', false);
     talkCfg.pitch = num('eyes8.pitch', 1.3, .5, 2); talkCfg.rate = num('eyes8.rate', 1, .6, 1.4);
     talkSliders.pitch(); talkSliders.rate();
     const vn = store.get('eyes8.voice', '');
